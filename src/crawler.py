@@ -93,10 +93,72 @@ def fetch_and_analyze_news():
     """
     使用Gemini API同时完成新闻爬取和分析任务
     """
-    # 调整提示词以获得更稳定的JSON输出
-    # 1. 明确要求dailyCommentary为格式化文本
-    # 2. 明确要求usTop10Stocks, hkTop10Stocks, cnTop10Stocks中每个股票都包含价格、市值、周/月涨跌幅
-    prompt_text = "你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。请根据你的知识库和可联网搜索到的过去一周的财经新闻和市场数据，完成以下分析任务。首先，从主流财经媒体和通讯社中获取最新的市场动态、政策变化和公司财报新闻。在获取了这些信息后，请完成以下分析：1. 整体市场情绪和摘要：给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。2. 每周点评与预判：给出对美股、港股和大陆股市的专业点评和对后续走势的预判。请将此部分内容格式化为清晰的文本，用“美股市场点评：”等标题区分。3. 中长线投资推荐：选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码，并为每个推荐给出对应的公司中文名称、当前股票价格、市值、市盈率、市净率、市销率、资产回报率以及过去一周和过去一个月的涨跌情况。同时，为每个推荐给出简短的入选理由（**每个理由请控制在200字以内**）。请将所有分析结果以严格的JSON格式返回，确保可直接解析。JSON对象的结构如下：{\"overallSentiment\": \"利好\",\"overallSummary\": \"...\",\"dailyCommentary\": \"...\",\"usTop10Stocks\": [{\"stockCode\": \"AAPL\",\"companyName\": \"苹果公司\",\"price\": \"...\","marketCap\": \"...\","peRatio": \"...\","psRatio": \"...\","roeRatio": \"...\","pbRatio": \"...\","weeklyChange\": \"...\","monthlyChange\": \"...\","reason\": \"...\"},...],\"hkTop10Stocks\": [{\"stockCode\": \"700.HK\",\"companyName\": \"腾讯控股\",\"price\": \"...\","marketCap\": \"...\","peRatio": \"...\","psRatio": \"...\","roeRatio": \"...\","pbRatio": \"...\","weeklyChange\": \"...\","monthlyChange\": \"...\","reason\": \"...\"},...],\"cnTop10Stocks\": [{\"stockCode\": \"600519.SH\",\"companyName\": \"贵州茅台\",\"price\": \"...\","marketCap\": \"...\","peRatio": \"...\","psRatio": \"...\","roeRatio": \"...\","pbRatio": \"...\","weeklyChange\": \"...\","monthlyChange\": \"...\","reason\": \"...\"},...]}}"
+    # 将 JSON 结构定义为 Python 字典，提高可读性
+    json_schema = {
+        "overallSentiment": "利好",
+        "overallSummary": "...",
+        "dailyCommentary": "...",
+        "usTop10Stocks": [
+            {
+                "stockCode": "AAPL",
+                "companyName": "苹果公司",
+                "price": "...",
+                "marketCap": "...",
+                "peRatio": "...",
+                "psRatio": "...",
+                "roeRatio": "...",
+                "pbRatio": "...",
+                "weeklyChange": "...",
+                "monthlyChange": "...",
+                "reason": "..."
+            }
+        ],
+        "hkTop10Stocks": [
+            {
+                "stockCode": "700.HK",
+                "companyName": "腾讯控股",
+                "price": "...",
+                "marketCap": "...",
+                "peRatio": "...",
+                "psRatio": "...",
+                "roeRatio": "...",
+                "pbRatio": "...",
+                "weeklyChange": "...",
+                "monthlyChange": "...",
+                "reason": "..."
+            }
+        ],
+        "cnTop10Stocks": [
+            {
+                "stockCode": "600519.SH",
+                "companyName": "贵州茅台",
+                "price": "...",
+                "marketCap": "...",
+                "peRatio": "...",
+                "psRatio": "...",
+                "roeRatio": "...",
+                "pbRatio": "...",
+                "weeklyChange": "...",
+                "monthlyChange": "...",
+                "reason": "..."
+            }
+        ]
+    }
+
+    # 使用多行字符串定义提示词的前缀部分
+    prompt_prefix = """
+你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。
+请根据你的知识库和可联网搜索到的过去一周的财经新闻和市场数据，完成以下分析任务。
+首先，从主流财经媒体和通讯社中获取最新的市场动态、政策变化和公司财报新闻。
+在获取了这些信息后，请完成以下分析：
+1. 整体市场情绪和摘要：给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。
+2. 每周点评与预判：给出对美股、港股和大陆股市的专业点评和对后续走势的预判。请将此部分内容格式化为清晰的文本，用“美股市场点评：”等标题区分。
+3. 中长线投资推荐：选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码，并为每个推荐给出对应的公司中文名称、当前股票价格、市值、市盈率、市净率、市销率、资产回报率以及过去一周和过去一个月的涨跌情况。同时，为每个推荐给出简短的入选理由（**每个理由请控制在200字以内**）。
+请将所有分析结果以严格的JSON格式返回，确保可直接解析。JSON对象的结构如下：
+"""
+    
+    # 组合成完整的提示词，并使用 json.dumps 格式化 JSON 结构
+    prompt_text = f"{prompt_prefix}{json.dumps(json_schema, indent=4, ensure_ascii=False)}"
     
     payload = {
         "contents": [{"parts": [{"text": prompt_text}]}],
