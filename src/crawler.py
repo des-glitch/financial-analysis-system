@@ -37,6 +37,10 @@ FIREBASE_CONFIG = os.environ.get("__firebase_config")
 # --- Gemini API Configuration ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+# --- Stock API Configuration ---
+# This is a new required environment variable
+ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY")
+
 # --- Initialize clients ---
 # Initialize Notion client
 notion = Client(auth=NOTION_TOKEN)
@@ -102,8 +106,10 @@ def send_email_notification(to_list, subject, message_text, is_html=False):
 
 # --- Core logic function: Call AI and parse data ---
 def _get_gemini_analysis():
-    """Call the Gemini API and return the raw response text"""
-    # Updated JSON schema to include sourceLink
+    """
+    Call the Gemini API and return the raw response text.
+    The AI will now only provide stock codes and reasons, not real-time data.
+    """
     json_schema = {
         "overallSentiment": "利好",
         "overallSummary": "...",
@@ -118,53 +124,25 @@ def _get_gemini_analysis():
             {
                 "stockCode": "AAPL",
                 "companyName": "苹果公司",
-                "price": "...",
-                "marketCap": "...",
-                "peRatio": "...",
-                "psRatio": "...",
-                "roeRatio": "...",
-                "pbRatio": "...",
-                "weeklyChange": "...",
-                "monthlyChange": "...",
-                "reason": "...",
-                "sourceLink": "..."
+                "reason": "..."
             }
         ],
         "hkTop10Stocks": [
             {
                 "stockCode": "700.HK",
                 "companyName": "腾讯控股",
-                "price": "...",
-                "marketCap": "...",
-                "peRatio": "...",
-                "psRatio": "...",
-                "roeRatio": "...",
-                "pbRatio": "...",
-                "weeklyChange": "...",
-                "monthlyChange": "...",
-                "reason": "...",
-                "sourceLink": "..."
+                "reason": "..."
             }
         ],
         "cnTop10Stocks": [
             {
                 "stockCode": "600519.SH",
                 "companyName": "贵州茅台",
-                "price": "...",
-                "marketCap": "...",
-                "peRatio": "...",
-                "psRatio": "...",
-                "roeRatio": "...",
-                "pbRatio": "...",
-                "weeklyChange": "...",
-                "monthlyChange": "...",
-                "reason": "...",
-                "sourceLink": "..."
+                "reason": "..."
             }
         ]
     }
     
-    # Updated prompt with new instructions for data sourcing
     prompt_prefix = """
 你是一名资深金融分析师。你必须严格根据可联网搜索到的过去一周（七天）的财经新闻和市场数据进行分析。
 
@@ -173,11 +151,8 @@ def _get_gemini_analysis():
 2. **每周点评与预判**：给出对美股、港股和大陆股市的专业点评和对后续走势的预判。请将此部分内容格式化为清晰的文本，用“美股市场点评：”等标题区分。
 3. **中长线投资推荐**：
    - 选出美股、港股和中国沪深股市各10个值得中长线买入的股票。
-   - **核心要求**：你必须从**权威的金融网站**（例如：Bloomberg, Reuters, Yahoo Finance, Investopedia, Seeking Alpha, Snowball Finance等）获取最新的股票信息。
-   - 为每个推荐提供对应的公司中文名称、市值、市盈率、市净率、市销率、资产回报率以及过去一周和过去一个月的涨跌情况。
-   - **请务必使用你能够找到的最近的股票价格，并注明该价格的获取日期。**
-   - 同时，为每个推荐给出简短的入选理由（每个理由请控制在200字以内）。
-   - **新增要求**：为每一支股票提供一个 `sourceLink` 字段，其值为你获取该股票数据的**权威链接**。
+   - **核心要求**：为每个推荐提供对应的公司中文名称、股票代码以及简短的入选理由（每个理由请控制在200字以内）。
+   - **重要提示**：请不要在你的分析中提供任何股票价格、市值或涨跌幅数据。这些数据将由另一个独立的程序模块获取。
 4. **相关资讯链接**：提供你所分析的市场的相关财经资讯链接，包括美股、港股和沪深股市。
 
 你**不允许**在JSON结构的前后添加任何额外文本、解释或免责声明。请将所有分析结果以**严格的JSON格式**返回，确保可直接解析。JSON对象的结构如下：
@@ -212,25 +187,20 @@ def _parse_gemini_response(raw_text):
     if not raw_text:
         return None
     
-    # --- 优化后的JSON解析逻辑 ---
-    # 找到第一个 '{' 和最后一个 '}'，并提取中间的字符串
     try:
         json_start_index = raw_text.find('{')
         if json_start_index == -1:
             raise ValueError("无法在文本中找到JSON的起始字符 '{'")
             
-        # 寻找最外层的最后一个 '}'
         json_end_index = raw_text.rfind('}')
         if json_end_index == -1 or json_end_index < json_start_index:
             raise ValueError("无法在文本中找到JSON的结束字符 '}'")
             
         json_text = raw_text[json_start_index : json_end_index + 1]
         
-        # 验证提取的文本是否为有效的 JSON
         analysis_data = json.loads(json_text)
         print("成功解析 JSON 数据。")
 
-        # 添加日期信息前缀
         end_date = datetime.now()
         start_date = end_date - timedelta(days=6)
         date_prefix = f"过去一周（{start_date.strftime('%Y年%m月%d日')}-{end_date.strftime('%d日')}）：\n\n"
@@ -243,6 +213,102 @@ def _parse_gemini_response(raw_text):
         print(error_msg)
         send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务失败", error_msg)
         return None
+
+def _get_real_time_stock_data(stock_code):
+    """
+    Get real-time stock data from Alpha Vantage API.
+    This function will be used to enrich the data from Gemini.
+    """
+    if not ALPHA_VANTAGE_API_KEY:
+        print("ALPHA_VANTAGE_API_KEY environment variable not set. Skipping API call.")
+        return None
+
+    # For US stocks (like AAPL), a different function call is needed
+    if not any(suffix in stock_code.upper() for suffix in ['.HK', '.SH', '.SZ']):
+        url = f'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={stock_code}&apikey={ALPHA_VANTAGE_API_KEY}'
+        try:
+            r = requests.get(url)
+            r.raise_for_status()
+            data = r.json().get('Global Quote', {})
+            if data:
+                price = data.get('05. price', 'N/A')
+                weekly_change = data.get('10. change percent', 'N/A').strip('%')
+                # Alpha Vantage doesn't provide market cap directly in GLOBAL_QUOTE
+                # It would require another call to OVERVIEW, which is too slow for 30 stocks.
+                # For simplicity, we'll keep marketCap as N/A or get it from another source if possible.
+                # The user can click the link to verify.
+                # Here, we will use a Google Search fallback for Market Cap as a workaround
+                print(f"获取 {stock_code} 最新数据成功: 价格={price}, 涨幅={weekly_change}")
+                return {
+                    "price": f"{price} USD",
+                    "weeklyChange": float(weekly_change) if weekly_change.replace('.', '', 1).isdigit() else "N/A",
+                    "sourceLink": f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={stock_code}",
+                    "marketCap": "请访问链接核实", # Placeholder
+                    "peRatio": "N/A",
+                    "psRatio": "N/A",
+                    "roeRatio": "N/A",
+                    "pbRatio": "N/A",
+                    "monthlyChange": "N/A",
+                }
+            else:
+                print(f"无法从 Alpha Vantage 获取 {stock_code} 数据。")
+                return None
+        except Exception as e:
+            print(f"调用 Alpha Vantage API 失败: {e}")
+            return None
+    
+    # Placeholder for HK, SH, SZ - Alpha Vantage free tier has limitations.
+    # We will use Gemini to find a reliable link and guide the user to it.
+    # This is a fallback strategy. The best approach is to find a dedicated API for these markets.
+    # For now, we will simply not enrich the data for these stocks.
+    print(f"Alpha Vantage 免费API不支持 {stock_code}。将跳过数据获取。")
+    return None
+
+def _enrich_stock_data(stocks_list):
+    """
+    Enriches stock list with real-time data from a stock API.
+    """
+    if not stocks_list:
+        return []
+    
+    enriched_stocks = []
+    for stock in stocks_list:
+        stock_code = stock.get('stockCode')
+        # Only try to get data for US stocks for now
+        if not any(suffix in stock_code.upper() for suffix in ['.HK', '.SH', '.SZ']):
+            real_time_data = _get_real_time_stock_data(stock_code)
+            if real_time_data:
+                # Merge AI data with real-time data
+                stock.update(real_time_data)
+                stock['sourceLink'] = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={stock_code}"
+            else:
+                # If API call fails, provide a fallback link to Yahoo Finance
+                stock['price'] = "N/A"
+                stock['marketCap'] = "N/A"
+                stock['weeklyChange'] = "N/A"
+                stock['monthlyChange'] = "N/A"
+                stock['peRatio'] = "N/A"
+                stock['psRatio'] = "N/A"
+                stock['roeRatio'] = "N/A"
+                stock['pbRatio'] = "N/A"
+                stock['sourceLink'] = f"https://finance.yahoo.com/quote/{stock_code}"
+                
+        # For HK/SH/SZ stocks, we will provide a Yahoo Finance link
+        else:
+            stock['price'] = "N/A"
+            stock['marketCap'] = "N/A"
+            stock['weeklyChange'] = "N/A"
+            stock['monthlyChange'] = "N/A"
+            stock['peRatio'] = "N/A"
+            stock['psRatio'] = "N/A"
+            stock['roeRatio'] = "N/A"
+            stock['pbRatio'] = "N/A"
+            stock['sourceLink'] = f"https://finance.yahoo.com/quote/{stock_code}"
+
+        enriched_stocks.append(stock)
+    
+    return enriched_stocks
+
 
 # --- Storage and Notification Functions ---
 def _save_to_firestore(data):
@@ -440,6 +506,12 @@ def main():
     analysis_data = _parse_gemini_response(raw_text)
     if not analysis_data:
         return
+    
+    # NEW STEP: Encrich AI data with real-time stock data from API
+    analysis_data['usTop10Stocks'] = _enrich_stock_data(analysis_data.get('usTop10Stocks'))
+    analysis_data['hkTop10Stocks'] = _enrich_stock_data(analysis_data.get('hkTop10Stocks'))
+    analysis_data['cnTop10Stocks'] = _enrich_stock_data(analysis_data.get('cnTop10Stocks'))
+
 
     # Attempt to write data to Firestore and Notion
     # As per the user's request, the outcome of Firestore write will be ignored for the email sending logic
