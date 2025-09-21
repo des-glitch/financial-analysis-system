@@ -90,6 +90,7 @@ def fetch_and_analyze_news():
         result_json = response.json()
         raw_text = result_json['candidates'][0]['content']['parts'][0]['text']
         print("成功从 Gemini API 获取响应。")
+        print(f"原始响应文本: {raw_text}")
         
         # 尝试从原始文本中提取JSON代码块
         json_match = re.search(r'```json\n(.*)\n```', raw_text, re.DOTALL)
@@ -98,8 +99,13 @@ def fetch_and_analyze_news():
         else:
             json_text = raw_text # 如果没有代码块，则尝试直接解析整个文本
         
-        analysis_data = json.loads(json_text)
-        print("成功解析 JSON 数据。")
+        try:
+            analysis_data = json.loads(json_text)
+            print("成功解析 JSON 数据。")
+        except json.JSONDecodeError as e:
+            print(f"解析 JSON 失败: {e}")
+            send_email_notification(GMAIL_RECIPIENT_EMAIL, "理财分析任务失败", f"解析 JSON 失败: {e}\n\n原始文本:\n{raw_text}")
+            return # 退出函数
         
         # 写入Notion数据库
         title = f"综合金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
