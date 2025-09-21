@@ -1,6 +1,5 @@
 import os
 import requests
-from bs4 import BeautifulSoup
 from notion_client import Client
 import base64
 from email.mime.text import MIMEText
@@ -9,6 +8,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from datetime import datetime
 import json
+import time
 
 # --- 配置部分 ---
 # 从GitHub Actions Secrets获取环境变量
@@ -62,12 +62,19 @@ def send_email_notification(to, subject, message_text):
         print(f"发送邮件失败: {e}")
 
 # --- AI分析部分 (使用Gemini API) ---
-def analyze_content(content):
+def fetch_and_analyze_news():
     """
-    使用Gemini API对文章内容进行总结、情绪和行情分析
+    使用Gemini API同时完成新闻爬取和分析任务
     """
     prompt_text = f"""
-    你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。请根据以下财经新闻和市场数据，完成以下分析任务：
+    你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。请根据最新的财经新闻和市场数据，完成以下分析任务。
+
+    首先，从以下主流财经媒体和通讯社中获取最新的市场动态、政策变化和公司财报新闻：
+    - 美国：路透社 (Reuters)、华尔街日报 (The Wall Street Journal)、彭博社 (Bloomberg)
+    - 香港：路透社中文网、香港经济日报
+    - 大陆：新浪财经、东方财富网、证券时报
+
+    在获取了这些信息后，请完成以下分析：
 
     1. **整体市场情绪和摘要：** 给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。
     2. **每日点评与预判：** 针对前一日的美股、港股和大陆股市，给出专业的点评和对后续走势的预判。
@@ -101,16 +108,14 @@ def analyze_content(content):
         ...
       ]
     }}
-
-    文章内容：
-    {content}
     """
     
     payload = {
         "contents": [{"parts": [{"text": prompt_text}]}],
         "generationConfig": {
             "responseMimeType": "application/json"
-        }
+        },
+        "tools": [{"google_search": {}}] # 启用Google搜索工具
     }
     
     headers = {
@@ -125,52 +130,32 @@ def analyze_content(content):
         
         result_json = response.json()
         
-        # 解析返回的JSON字符串
         analysis_data = json.loads(result_json['candidates'][0]['content']['parts'][0]['text'])
         
-        return analysis_data['overallSentiment'], analysis_data['overallSummary'], analysis_data['dailyCommentary'], \
-               analysis_data['usTop10Stocks'], analysis_data['hkTop10Stocks'], analysis_data['cnTop10Stocks']
-    except Exception as e:
-        print(f"调用Gemini API失败: {e}")
-        return "中性", "AI分析失败", "AI分析失败", [], [], []
+        # 写入Notion数据库
+        title = f"综合金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
+        link = "N/A" # 综合报告没有单一链接
+        
+        write_to_notion(title, link, analysis_data['overallSentiment'], analysis_data['overallSummary'], analysis_data['dailyCommentary'],
+                        analysis_data['usTop10Stocks'], analysis_data['hkTop10Stocks'], analysis_data['cnTop10Stocks'])
+        
+        # 发送邮件通知
+        email_subject = f"【理财分析】综合报告 - {datetime.now().strftime('%Y-%m-%d')}"
+        email_body = (
+            f"整体情绪：{analysis_data['overallSentiment']}\n\n"
+            f"整体摘要：{analysis_data['overallSummary']}\n\n"
+            f"每日点评：{analysis_data['dailyCommentary']}\n\n"
+            f"美股中长线推荐：{json.dumps(analysis_data['usTop10Stocks'], indent=2)}\n\n"
+            f"港股中长线推荐：{json.dumps(analysis_data['hkTop10Stocks'], indent=2)}\n\n"
+            f"沪深股市中长线推荐：{json.dumps(analysis_data['cnTop10Stocks'], indent=2)}\n\n"
+            f"原文链接：{link}"
+        )
+        send_email_notification(GMAIL_RECIPIENT_EMAIL, email_subject, email_body)
 
-# --- 数据爬取与分析主函数 ---
-def fetch_and_analyze_news():
-    """主函数：爬取、分析、存储并推送"""
-    # 这是一个示例爬虫，请根据你的需求替换为实际的爬虫代码
-    # 获取新闻标题、链接和全文内容
-    articles_to_process = [
-        {"title": "美股市场强劲反弹，科技股领涨", "link": "https://example.com/news1", "content": "这是文章的全文内容，包含了关于美股市场强劲反弹、科技股领涨的具体信息。"}
-    ]
-    
-    try:
-        for article in articles_to_process:
-            title = article["title"]
-            link = article["link"]
-            content = article["content"]
-            
-            # AI分析
-            overallSentiment, overallSummary, dailyCommentary, usTop10Stocks, hkTop10Stocks, cnTop10Stocks = analyze_content(content)
-            
-            # 写入Notion数据库
-            write_to_notion(title, link, overallSentiment, overallSummary, dailyCommentary, usTop10Stocks, hkTop10Stocks, cnTop10Stocks)
-            
-            # 发送邮件通知
-            email_subject = f"【理财分析】新文章：{title}"
-            email_body = (
-                f"整体情绪：{overallSentiment}\n\n"
-                f"整体摘要：{overallSummary}\n\n"
-                f"每日点评：{dailyCommentary}\n\n"
-                f"美股中长线推荐：{json.dumps(usTop10Stocks, indent=2)}\n\n"
-                f"港股中长线推荐：{json.dumps(hkTop10Stocks, indent=2)}\n\n"
-                f"沪深股市中长线推荐：{json.dumps(cnTop10Stocks, indent=2)}\n\n"
-                f"原文链接：{link}"
-            )
-            send_email_notification(GMAIL_RECIPIENT_EMAIL, email_subject, email_body)
-            
     except Exception as e:
-        print(f"爬取或分析失败：{e}")
-        send_email_notification(GMAIL_RECIPIENT_EMAIL, "理财分析任务失败", f"爬取任务失败：{e}")
+        print(f"Gemini调用或分析失败: {e}")
+        send_email_notification(GMAIL_RECIPIENT_EMAIL, "理财分析任务失败", f"Gemini调用或分析失败：{e}")
+
 
 # --- Notion数据库写入函数 ---
 def write_to_notion(title, url, overallSentiment, overallSummary, dailyCommentary, usTop10Stocks, hkTop10Stocks, cnTop10Stocks):
