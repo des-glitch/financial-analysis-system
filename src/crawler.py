@@ -76,7 +76,7 @@ def get_gmail_service():
         token_uri="https://oauth2.googleapis.com/token"
     )
     # Use the refresh token to get a new access token
-    creds.refresh(Request())
+    creds.refresh(google.auth.transport.requests.Request())
     service = build("gmail", "v1", credentials=creds)
     return service
 
@@ -216,73 +216,111 @@ def _parse_gemini_response(raw_text):
 
 def _get_real_time_stock_data(stock_code):
     """
-    Get real-time stock data from Alpha Vantage API.
-    This function will be used to enrich the data from Gemini.
+    Get real-time stock data (price and weekly change) from Alpha Vantage API.
     """
     if not ALPHA_VANTAGE_API_KEY:
         print("ALPHA_VANTAGE_API_KEY environment variable not set. Skipping API call.")
         return None
 
-    # For US stocks (like AAPL), a different function call is needed
-    if not any(suffix in stock_code.upper() for suffix in ['.HK', '.SH', '.SZ']):
-        url = f'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={stock_code}&apikey={ALPHA_VANTAGE_API_KEY}'
-        try:
-            r = requests.get(url)
-            r.raise_for_status()
-            data = r.json().get('Global Quote', {})
-            if data:
-                price = data.get('05. price', 'N/A')
-                weekly_change = data.get('10. change percent', 'N/A').strip('%')
-                # Alpha Vantage doesn't provide market cap directly in GLOBAL_QUOTE
-                # It would require another call to OVERVIEW, which is too slow for 30 stocks.
-                # For simplicity, we'll keep marketCap as N/A or get it from another source if possible.
-                # The user can click the link to verify.
-                # Here, we will use a Google Search fallback for Market Cap as a workaround
-                print(f"获取 {stock_code} 最新数据成功: 价格={price}, 涨幅={weekly_change}")
-                return {
-                    "price": f"{price} USD",
-                    "weeklyChange": float(weekly_change) if weekly_change.replace('.', '', 1).isdigit() else "N/A",
-                    "sourceLink": f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={stock_code}",
-                    "marketCap": "请访问链接核实", # Placeholder
-                    "peRatio": "N/A",
-                    "psRatio": "N/A",
-                    "roeRatio": "N/A",
-                    "pbRatio": "N/A",
-                    "monthlyChange": "N/A",
-                }
-            else:
-                print(f"无法从 Alpha Vantage 获取 {stock_code} 数据。")
-                return None
-        except Exception as e:
-            print(f"调用 Alpha Vantage API 失败: {e}")
+    url = f'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={stock_code}&apikey={ALPHA_VANTAGE_API_KEY}'
+    try:
+        r = requests.get(url)
+        r.raise_for_status()
+        data = r.json().get('Global Quote', {})
+        if data:
+            price = data.get('05. price', 'N/A')
+            weekly_change = data.get('10. change percent', 'N/A').strip('%')
+            print(f"获取 {stock_code} 最新报价数据成功: 价格={price}, 涨幅={weekly_change}")
+            return {
+                "price": f"{price} USD",
+                "weeklyChange": float(weekly_change) if weekly_change.replace('.', '', 1).isdigit() else "N/A",
+                "sourceLink": f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={stock_code}",
+            }
+        else:
+            print(f"无法从 Alpha Vantage 获取 {stock_code} 报价数据。")
             return None
-    
-    # Placeholder for HK, SH, SZ - Alpha Vantage free tier has limitations.
-    # We will use Gemini to find a reliable link and guide the user to it.
-    # This is a fallback strategy. The best approach is to find a dedicated API for these markets.
-    # For now, we will simply not enrich the data for these stocks.
-    print(f"Alpha Vantage 免费API不支持 {stock_code}。将跳过数据获取。")
-    return None
+    except Exception as e:
+        print(f"调用 Alpha Vantage GLOBAL_QUOTE API 失败: {e}")
+        return None
+
+def _get_fundamental_data(stock_code):
+    """
+    Get fundamental stock data (P/E, P/S, Market Cap, etc.) from Alpha Vantage API.
+    """
+    if not ALPHA_VANTAGE_API_KEY:
+        print("ALPHA_VANTAGE_API_KEY environment variable not set. Skipping API call.")
+        return None
+
+    url = f'https://www.alphavantage.co/query?function=OVERVIEW&symbol={stock_code}&apikey={ALPHA_VANTAGE_API_KEY}'
+    try:
+        r = requests.get(url)
+        r.raise_for_status()
+        data = r.json()
+        if data and data.get('Symbol') == stock_code:
+            market_cap = data.get('MarketCapitalization', 'N/A')
+            pe_ratio = data.get('PERatio', 'N/A')
+            ps_ratio = data.get('PriceToSalesRatioTTM', 'N/A')
+            roe_ratio = data.get('ReturnOnEquityTTM', 'N/A')
+            pb_ratio = data.get('PriceToBookRatio', 'N/A')
+            
+            # Format market cap for better readability
+            if isinstance(market_cap, str) and market_cap.isdigit():
+                market_cap_value = int(market_cap)
+                if market_cap_value >= 1_000_000_000_000:
+                    market_cap = f"{market_cap_value / 1_000_000_000_000:.2f} T"
+                elif market_cap_value >= 1_000_000_000:
+                    market_cap = f"{market_cap_value / 1_000_000_000:.2f} B"
+                else:
+                    market_cap = f"{market_cap_value}"
+                    
+            print(f"获取 {stock_code} 基本面数据成功: 市值={market_cap}, PE={pe_ratio}, PS={ps_ratio}")
+            
+            return {
+                "marketCap": market_cap,
+                "peRatio": pe_ratio,
+                "psRatio": ps_ratio,
+                "roeRatio": roe_ratio,
+                "pbRatio": pb_ratio,
+            }
+        else:
+            print(f"无法从 Alpha Vantage 获取 {stock_code} 基本面数据。")
+            return None
+    except Exception as e:
+        print(f"调用 Alpha Vantage OVERVIEW API 失败: {e}")
+        return None
 
 def _enrich_stock_data(stocks_list):
     """
-    Enriches stock list with real-time data from a stock API.
+    Enriches stock list with real-time and fundamental data from a stock API.
     """
     if not stocks_list:
         return []
     
     enriched_stocks = []
-    for stock in stocks_list:
+    for i, stock in enumerate(stocks_list):
         stock_code = stock.get('stockCode')
         # Only try to get data for US stocks for now
         if not any(suffix in stock_code.upper() for suffix in ['.HK', '.SH', '.SZ']):
+            # 获取实时报价数据
             real_time_data = _get_real_time_stock_data(stock_code)
-            if real_time_data:
-                # Merge AI data with real-time data
+            
+            # 延时以遵守 API 频率限制
+            print(f"为了遵守API频率限制，暂停15秒...")
+            time.sleep(15)
+
+            # 获取基本面数据
+            fundamental_data = _get_fundamental_data(stock_code)
+            
+            # 延时以遵守 API 频率限制
+            print(f"为了遵守API频率限制，再次暂停15秒...")
+            time.sleep(15)
+
+            # 合并数据
+            if real_time_data and fundamental_data:
                 stock.update(real_time_data)
-                stock['sourceLink'] = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={stock_code}"
+                stock.update(fundamental_data)
             else:
-                # If API call fails, provide a fallback link to Yahoo Finance
+                # If any API call fails, provide a fallback link to Yahoo Finance
                 stock['price'] = "N/A"
                 stock['marketCap'] = "N/A"
                 stock['weeklyChange'] = "N/A"
