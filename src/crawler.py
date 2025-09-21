@@ -183,12 +183,12 @@ def fetch_and_analyze_news():
         print("成功从 Gemini API 获取响应。")
         print(f"原始响应文本: {raw_text}")
         
-        # 尝试从原始文本中提取JSON对象
-        json_start_index = raw_text.find('{')
-        json_end_index = raw_text.rfind('}')
+        # 使用正则表达式更健壮地提取JSON对象
+        # re.DOTALL 标志使得 . 能够匹配换行符
+        json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
         
-        if json_start_index != -1 and json_end_index != -1 and json_end_index > json_start_index:
-            json_text = raw_text[json_start_index:json_end_index + 1]
+        if json_match:
+            json_text = json_match.group(0)
             print("成功提取JSON内容。")
         else:
             json_text = raw_text
