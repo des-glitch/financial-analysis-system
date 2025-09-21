@@ -10,6 +10,7 @@ from datetime import datetime
 import json
 import time
 import re
+from firebase_admin import credentials, initialize_app, firestore
 
 # --- 配置部分 ---
 # 从GitHub Actions Secrets获取环境变量
@@ -20,7 +21,14 @@ GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID")
 GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET")
 GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN")
 # 这是一个逗号分隔的邮箱地址列表
-GMAIL_RECIPIENT_EMAILS = os.environ.get("GMAIL_RECIPIENT_EMAILS").split(',')
+# 修复了当环境变量不存在时的错误
+GMAIL_RECIPIENT_EMAILS = os.environ.get("GMAIL_RECIPIENT_EMAILS", "").split(',')
+
+# 从环境变量中获取Firebase配置
+FIREBASE_CONFIG_JSON = os.environ.get("FIREBASE_CONFIG_JSON")
+# 这两个变量在Canvas环境中会自动提供
+APP_ID = os.environ.get("__app_id")
+FIREBASE_CONFIG = os.environ.get("__firebase_config")
 
 # --- Gemini API配置 ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -28,6 +36,22 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 # --- 初始化客户端 ---
 # 初始化Notion客户端
 notion = Client(auth=NOTION_TOKEN)
+
+# 初始化Firebase Admin SDK
+# 如果在Canvas环境外运行，需要使用`FIREBASE_CONFIG_JSON`
+# 如果在Canvas环境内运行，则此段代码不会执行，因为Canvas已配置
+if not FIREBASE_CONFIG:
+    try:
+        cred = credentials.Certificate(json.loads(FIREBASE_CONFIG_JSON))
+        initialize_app(cred)
+        db = firestore.client()
+        print("Firebase Admin SDK 初始化成功。")
+    except Exception as e:
+        print(f"Firebase Admin SDK 初始化失败: {e}")
+        db = None
+else:
+    # 在Canvas环境中，我们不使用Admin SDK，只准备好数据路径
+    db = None
 
 # --- Gmail API认证 ---
 def get_gmail_service():
@@ -114,20 +138,22 @@ def fetch_and_analyze_news():
             send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务失败", f"解析 JSON 失败: {e}\n\n原始文本:\n{raw_text}")
             return # 退出函数
         
+        # --- 将分析结果写入Firestore ---
+        if db:
+            doc_ref = db.collection('artifacts').document(APP_ID).collection('public').document('data').collection('finance_reports').document('latest')
+            doc_ref.set(analysis_data)
+            print("成功将数据写入Firestore。")
+
         # 写入Notion数据库
         title = f"每周金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
         link = "N/A" # 综合报告没有单一链接
         
-        # --- 新增：处理股票推荐数据以适应Notion富文本限制 ---
+        # --- 处理股票推荐数据以适应Notion富文本限制 ---
         def process_stocks_for_notion(stocks_list, max_len=1900):
             """将股票推荐列表转换为JSON字符串并确保长度不超过max_len"""
-            # 尝试生成JSON字符串
             json_str = json.dumps(stocks_list, indent=2, ensure_ascii=False)
-            
-            # 如果字符串过长，则截断
             if len(json_str) > max_len:
                 print(f"股票列表JSON字符串长度过长（{len(json_str)}），正在截断...")
-                # 简单截断，保留JSON结构
                 truncated_str = json_str[:max_len-5] + '...' + json_str[-2:]
                 return truncated_str
             return json_str
@@ -135,12 +161,11 @@ def fetch_and_analyze_news():
         us_stocks_notion = process_stocks_for_notion(analysis_data['usTop10Stocks'])
         hk_stocks_notion = process_stocks_for_notion(analysis_data['hkTop10Stocks'])
         cn_stocks_notion = process_stocks_for_notion(analysis_data['cnTop10Stocks'])
-        # --- 新增结束 ---
 
         write_to_notion(title, link, analysis_data['overallSentiment'], analysis_data['overallSummary'], analysis_data['dailyCommentary'],
                         us_stocks_notion, hk_stocks_notion, cn_stocks_notion)
 
-        # --- 新增：生成HTML邮件内容 ---
+        # --- 生成HTML邮件内容 ---
         def generate_html_email_body(data):
             """生成HTML格式的邮件正文"""
             us_stocks_html = "".join([f'<div style="background-color:#f9fafb;border-radius:8px;padding:1rem;box-shadow:0 1px 2px rgba(0,0,0,0.05);margin-bottom:1rem;">'
