@@ -20,9 +20,13 @@ NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID")
 GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET")
 GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN")
-# 这是一个逗号分隔的邮箱地址列表
-# 修复了当环境变量不存在时的错误，并提供了默认值
-GMAIL_RECIPIENT_EMAILS = os.environ.get("GMAIL_RECIPIENT_EMAILS", "tgllres@gmail.com").split(',')
+
+# 修复了环境变量名称不匹配的问题，同时支持单个或多个邮件地址
+gmail_emails_str = os.environ.get("GMAIL_RECIPIENT_EMAILS") or os.environ.get("GMAIL_RECIPIENT_EMAIL")
+if gmail_emails_str:
+    GMAIL_RECIPIENT_EMAILS = [email.strip() for email in gmail_emails_str.split(',')]
+else:
+    GMAIL_RECIPIENT_EMAILS = []
 
 # 从环境变量中获取Firebase配置
 FIREBASE_CONFIG_JSON = os.environ.get("FIREBASE_CONFIG_JSON")
@@ -41,13 +45,17 @@ notion = Client(auth=NOTION_TOKEN)
 # 如果在Canvas环境外运行，需要使用`FIREBASE_CONFIG_JSON`
 # 如果在Canvas环境内运行，则此段代码不会执行，因为Canvas已配置
 if not FIREBASE_CONFIG:
-    try:
-        cred = credentials.Certificate(json.loads(FIREBASE_CONFIG_JSON))
-        initialize_app(cred)
-        db = firestore.client()
-        print("Firebase Admin SDK 初始化成功。")
-    except Exception as e:
-        print(f"Firebase Admin SDK 初始化失败: {e}")
+    if FIREBASE_CONFIG_JSON:
+        try:
+            cred = credentials.Certificate(json.loads(FIREBASE_CONFIG_JSON))
+            initialize_app(cred)
+            db = firestore.client()
+            print("Firebase Admin SDK 初始化成功。")
+        except Exception as e:
+            print(f"Firebase Admin SDK 初始化失败: {e}")
+            db = None
+    else:
+        print("未检测到 FIREBASE_CONFIG_JSON 环境变量，Firebase Admin SDK 未初始化。")
         db = None
 else:
     # 在Canvas环境中，我们不使用Admin SDK，只准备好数据路径
@@ -78,6 +86,10 @@ def create_message(sender, to, subject, message_text, subtype="plain"):
 
 def send_email_notification(to_list, subject, message_text, is_html=False):
     """使用Gmail API发送邮件"""
+    if not to_list:
+        print("未指定收件人邮箱，跳过邮件发送。")
+        return
+        
     try:
         service = get_gmail_service()
         for to in to_list:
@@ -88,12 +100,10 @@ def send_email_notification(to_list, subject, message_text, is_html=False):
     except Exception as e:
         print(f"发送邮件失败: {e}")
 
-# --- AI分析部分 (使用Gemini API) ---
-def fetch_and_analyze_news():
-    """
-    使用Gemini API同时完成新闻爬取和分析任务
-    """
-    # 将 JSON 结构定义为 Python 字典，提高可读性
+
+# --- 核心逻辑函数：调用AI并解析数据 ---
+def _get_gemini_analysis():
+    """调用Gemini API并返回原始响应文本"""
     json_schema = {
         "overallSentiment": "利好",
         "overallSummary": "...",
@@ -145,7 +155,6 @@ def fetch_and_analyze_news():
         ]
     }
 
-    # 使用多行字符串定义提示词的前缀部分
     prompt_prefix = """
 你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。
 请根据你的知识库和可联网搜索到的过去一周的财经新闻和市场数据，完成以下分析任务。
@@ -157,62 +166,74 @@ def fetch_and_analyze_news():
 请将所有分析结果以严格的JSON格式返回，确保可直接解析。JSON对象的结构如下：
 """
     
-    # 组合成完整的提示词，并使用 json.dumps 格式化 JSON 结构
     prompt_text = f"{prompt_prefix}{json.dumps(json_schema, indent=4, ensure_ascii=False)}"
     
     payload = {
         "contents": [{"parts": [{"text": prompt_text}]}],
-        "tools": [{"google_search": {}}] # 启用Google搜索工具
+        "tools": [{"google_search": {}}]
     }
     
-    headers = {
-        "Content-Type": "application/json"
-    }
-
+    headers = { "Content-Type": "application/json" }
     api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={GEMINI_API_KEY}"
     
     print("开始调用 Gemini API...")
-    print(f"API URL: {api_url}")
-    print(f"请求负载: {json.dumps(payload, indent=2)}")
     try:
         response = requests.post(api_url, headers=headers, data=json.dumps(payload))
-        response.raise_for_status()  # 检查HTTP错误
-        
+        response.raise_for_status()
         result_json = response.json()
         raw_text = result_json['candidates'][0]['content']['parts'][0]['text']
         print("成功从 Gemini API 获取响应。")
         print(f"原始响应文本: {raw_text}")
-        
-        # 使用正则表达式更健壮地提取JSON对象
-        # re.DOTALL 标志使得 . 能够匹配换行符
-        json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
-        
-        if json_match:
-            json_text = json_match.group(0)
-            print("成功提取JSON内容。")
-        else:
-            json_text = raw_text
-            print("未能提取到有效的JSON块，将尝试解析整个响应。")
-        
-        try:
-            analysis_data = json.loads(json_text)
-            print("成功解析 JSON 数据。")
-        except json.JSONDecodeError as e:
-            print(f"解析 JSON 失败: {e}")
-            send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务失败", f"解析 JSON 失败: {e}\n\n原始文本:\n{raw_text}")
-            return # 退出函数
-        
-        # --- 将分析结果写入Firestore ---
-        if db:
-            doc_ref = db.collection('artifacts').document(APP_ID).collection('public').document('data').collection('finance_reports').document('latest')
-            doc_ref.set(analysis_data)
-            print("成功将数据写入Firestore。")
+        return raw_text
+    except Exception as e:
+        error_msg = f"Gemini API 调用失败: {e}"
+        print(error_msg)
+        return None
 
-        # 写入Notion数据库
-        title = f"每周金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
-        link = "N/A" # 综合报告没有单一链接
+def _parse_gemini_response(raw_text):
+    """从原始文本中解析JSON数据"""
+    if not raw_text:
+        return None
         
-        # --- 处理股票推荐数据以适应Notion富文本限制 ---
+    json_match = re.search(r'\{.*?\}', raw_text, re.DOTALL)
+    if json_match:
+        json_text = json_match.group(0)
+        print("成功提取JSON内容。")
+    else:
+        json_text = raw_text
+        print("未能提取到有效的JSON块，将尝试解析整个响应。")
+    
+    try:
+        analysis_data = json.loads(json_text)
+        print("成功解析 JSON 数据。")
+        return analysis_data
+    except json.JSONDecodeError as e:
+        error_msg = f"解析 JSON 失败: {e}\n\n原始文本:\n{raw_text}"
+        print(error_msg)
+        send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务失败", error_msg)
+        return None
+
+# --- 存储和通知函数 ---
+def _save_to_firestore(data):
+    """将数据写入Firestore数据库"""
+    if not db:
+        print("Firestore Admin SDK 未初始化，跳过写入。")
+        return
+    try:
+        doc_ref = db.collection('artifacts').document(APP_ID).collection('public').document('data').collection('finance_reports').document('latest')
+        doc_ref.set(data)
+        print("成功将数据写入Firestore。")
+        return True
+    except Exception as e:
+        print(f"写入Firestore失败: {e}")
+        return False
+
+def _save_to_notion(data):
+    """将数据写入Notion数据库"""
+    try:
+        title = f"每周金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
+        link = "N/A"
+        
         def process_stocks_for_notion(stocks_list, max_len=1900):
             """将股票推荐列表转换为JSON字符串并确保长度不超过max_len"""
             json_str = json.dumps(stocks_list, indent=2, ensure_ascii=False)
@@ -222,139 +243,137 @@ def fetch_and_analyze_news():
                 return truncated_str
             return json_str
 
-        us_stocks_notion = process_stocks_for_notion(analysis_data['usTop10Stocks'])
-        hk_stocks_notion = process_stocks_for_notion(analysis_data['hkTop10Stocks'])
-        cn_stocks_notion = process_stocks_for_notion(analysis_data['cnTop10Stocks'])
+        us_stocks_notion = process_stocks_for_notion(data['usTop10Stocks'])
+        hk_stocks_notion = process_stocks_for_notion(data['hkTop10Stocks'])
+        cn_stocks_notion = process_stocks_for_notion(data['cnTop10Stocks'])
 
-        write_to_notion(title, link, analysis_data['overallSentiment'], analysis_data['overallSummary'], analysis_data['dailyCommentary'],
-                        us_stocks_notion, hk_stocks_notion, cn_stocks_notion)
-
-        # --- 生成HTML邮件内容 ---
-        def generate_html_email_body(data):
-            """生成HTML格式的邮件正文"""
-            def get_change_color(change):
-                """根据涨跌幅返回颜色"""
-                if isinstance(change, (int, float)):
-                    if change > 0:
-                        return "#16a34a"  # 绿色
-                    elif change < 0:
-                        return "#dc2626"  # 红色
-                return "#4b5563" # 中性色
-
-            def format_stocks_html(stocks, market_name):
-                """生成股票推荐的HTML内容"""
-                html = f'<div><h3 style="font-size: 1.25rem; font-weight: bold; color: #111827; margin-bottom: 1rem;">{market_name}</h3>'
-                for s in stocks:
-                    weekly_change = s.get('weeklyChange', 'N/A')
-                    monthly_change = s.get('monthlyChange', 'N/A')
-                    
-                    # 格式化涨跌幅
-                    weekly_change_str = f'{weekly_change}%' if isinstance(weekly_change, (int, float)) else weekly_change
-                    monthly_change_str = f'{monthly_change}%' if isinstance(monthly_change, (int, float)) else monthly_change
-                    
-                    html += f"""
-                    <div style="background-color:#f9fafb;border-radius:8px;padding:1rem;box-shadow:0 1px 2px rgba(0,0,0,0.05);margin-bottom:1rem;">
-                        <h4 style="font-size:1.125rem;font-weight:600;color:#111827;margin-bottom:0.5rem;">{s['companyName']} ({s['stockCode']})</h4>
-                        <ul style="list-style:none;padding:0;margin:0;font-size:0.875rem;color:#4b5563;">
-                            <li style="margin-bottom:0.25rem;"><strong>价格:</strong> {s.get('price', 'N/A')}</li>
-                            <li style="margin-bottom:0.25rem;"><strong>市值:</strong> {s.get('marketCap', 'N/A')}</li>
-                            <li style="margin-bottom:0.25rem;"><strong>市盈率 (PE):</strong> {s.get('peRatio', 'N/A')}</li>
-                            <li style="margin-bottom:0.25rem;"><strong>市净率 (PB):</strong> {s.get('pbRatio', 'N/A')}</li>
-                            <li style="margin-bottom:0.25rem;"><strong>市销率 (PS):</strong> {s.get('psRatio', 'N/A')}</li>
-                            <li style="margin-bottom:0.25rem;"><strong>资产回报率 (ROE):</strong> {s.get('roeRatio', 'N/A')}</li>
-                            <li style="margin-bottom:0.25rem;"><strong>周涨跌:</strong> <span style="color:{get_change_color(s.get('weeklyChange'))};">{weekly_change_str}</span></li>
-                            <li style="margin-bottom:0.25rem;"><strong>月涨跌:</strong> <span style="color:{get_change_color(s.get('monthlyChange'))};">{monthly_change_str}</span></li>
-                        </ul>
-                        <p style="margin-top:0.75rem;font-size:0.875rem;color:#4b5563;"><strong>推荐理由:</strong> {s['reason']}</p>
-                    </div>
-                    """
-                html += '</div>'
-                return html
-                
-            # 将字符串替换操作移动到 f-string 之外，以避免语法错误。
-            daily_commentary_html = data['dailyCommentary'].replace('\n', '<br>')
-
-            us_stocks_html = format_stocks_html(data['usTop10Stocks'], '美股 (US)')
-            hk_stocks_html = format_stocks_html(data['hkTop10Stocks'], '港股 (HK)')
-            cn_stocks_html = format_stocks_html(data['cnTop10Stocks'], '沪深股市 (CN)')
-            
-            sentiment_color_map = {'利好': '#dcfce7', '利空': '#fee2e2', '中性': '#fef9c3'}
-            sentiment_text_color_map = {'利好': '#16a34a', '利空': '#dc2626', '中性': '#ca8a04'}
-            sentiment_bg = sentiment_color_map.get(data['overallSentiment'], '#f3f4f6')
-            sentiment_text = sentiment_text_color_map.get(data['overallSentiment'], '#374151')
-
-            html_content = f"""
-            <html>
-            <body style="font-family: 'Inter', sans-serif; background-color: #f9fafb; padding: 2rem;">
-                <div style="max-width: 800px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); padding: 2rem;">
-                    <h1 style="text-align: center; font-size: 2.25rem; font-weight: 800; color: #111827; margin-bottom: 0.5rem;">每周金融分析报告</h1>
-                    <p style="text-align: center; font-size: 1.125rem; color: #4b5563; margin-bottom: 2rem;">由 Gemini AI 自动生成</p>
-
-                    <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); margin-bottom: 2rem;">
-                        <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">整体市场情绪</h2>
-                        <div style="font-size: 2.25rem; font-weight: bold; border-radius: 8px; padding: 1rem; margin-top: 1rem; text-align: center; background-color: {sentiment_bg}; color: {sentiment_text};">
-                            {data['overallSentiment']}
-                        </div>
-                    </div>
-
-                    <div style="display: grid; grid-template-columns: 1fr; gap: 2rem; margin-bottom: 2rem;">
-                        <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-                            <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">整体摘要</h2>
-                            <p style="margin-top: 1rem; color: #374151; line-height: 1.5;">{data['overallSummary']}</p>
-                        </div>
-                        <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-                            <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">每周点评</h2>
-                            <p style="margin-top: 1rem; color: #374151; line-height: 1.5;">{daily_commentary_html}</p>
-                        </div>
-                    </div>
-
-                    <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-                        <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">中长线投资推荐</h2>
-                        <div style="display: grid; grid-template-columns: 1fr; gap: 1.5rem; margin-top: 1.5rem;">
-                            {us_stocks_html}
-                            {hk_stocks_html}
-                            {cn_stocks_html}
-                        </div>
-                    </div>
-                </div>
-            </body>
-            </html>
-            """
-            return html_content
-
-        # 生成HTML邮件正文
-        email_html_body = generate_html_email_body(analysis_data)
-        
-        # 发送邮件通知，现在使用HTML格式
-        email_subject = f"【理财分析】每周报告 - {datetime.now().strftime('%Y-%m-%d')}"
-        send_email_notification(GMAIL_RECIPIENT_EMAILS, email_subject, email_html_body, is_html=True)
-
-    except Exception as e:
-        print(f"Gemini调用或分析失败: {e}")
-        send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务失败", f"Gemini调用或分析失败：{e}")
-
-
-# --- Notion数据库写入函数 ---
-def write_to_notion(title, url, overallSentiment, overallSummary, dailyCommentary, usTop10Stocks, hkTop10Stocks, cnTop10Stocks):
-    """将数据写入Notion数据库"""
-    try:
         notion.pages.create(
             parent={"database_id": NOTION_DATABASE_ID},
             properties={
                 "Title": {"title": [{"text": {"content": title}}]},
-                "URL": {"url": url},
-                "OverallSentiment": {"select": {"name": overallSentiment}},
-                "OverallSummary": {"rich_text": [{"text": {"content": overallSummary}}]},
-                "DailyCommentary": {"rich_text": [{"text": {"content": dailyCommentary}}]},
-                "usTop10Stocks": {"rich_text": [{"text": {"content": usTop10Stocks}}]},
-                "hkTop10Stocks": {"rich_text": [{"text": {"content": hkTop10Stocks}}]},
-                "cnTop10Stocks": {"rich_text": [{"text": {"content": cnTop10Stocks}}]},
+                "URL": {"url": link},
+                "OverallSentiment": {"select": {"name": data['overallSentiment']}},
+                "OverallSummary": {"rich_text": [{"text": {"content": data['overallSummary']}}]},
+                "DailyCommentary": {"rich_text": [{"text": {"content": data['dailyCommentary']}}]},
+                "usTop10Stocks": {"rich_text": [{"text": {"content": us_stocks_notion}}]},
+                "hkTop10Stocks": {"rich_text": [{"text": {"content": hk_stocks_notion}}]},
+                "cnTop10Stocks": {"rich_text": [{"text": {"content": cn_stocks_notion}}]},
                 "CrawledDate": {"date": {"start": datetime.now().isoformat()}}
             }
         )
         print(f"成功写入Notion：{title}")
+        return True
     except Exception as e:
         print(f"写入Notion失败：{e}")
+        return False
+
+def _generate_html_email_body(data):
+    """生成HTML格式的邮件正文"""
+    def get_change_color(change):
+        if isinstance(change, (int, float)):
+            if change > 0: return "#16a34a"
+            elif change < 0: return "#dc2626"
+        return "#4b5563"
+
+    def format_stocks_html(stocks, market_name):
+        html = f'<div><h3 style="font-size: 1.25rem; font-weight: bold; color: #111827; margin-bottom: 1rem;">{market_name}</h3>'
+        for s in stocks:
+            weekly_change = s.get('weeklyChange', 'N/A')
+            monthly_change = s.get('monthlyChange', 'N/A')
+            weekly_change_str = f'{weekly_change}%' if isinstance(weekly_change, (int, float)) else weekly_change
+            monthly_change_str = f'{monthly_change}%' if isinstance(monthly_change, (int, float)) else monthly_change
+            html += f"""
+            <div style="background-color:#f9fafb;border-radius:8px;padding:1rem;box-shadow:0 1px 2px rgba(0,0,0,0.05);margin-bottom:1rem;">
+                <h4 style="font-size:1.125rem;font-weight:600;color:#111827;margin-bottom:0.5rem;">{s['companyName']} ({s['stockCode']})</h4>
+                <ul style="list-style:none;padding:0;margin:0;font-size:0.875rem;color:#4b5563;">
+                    <li style="margin-bottom:0.25rem;"><strong>价格:</strong> {s.get('price', 'N/A')}</li>
+                    <li style="margin-bottom:0.25rem;"><strong>市值:</strong> {s.get('marketCap', 'N/A')}</li>
+                    <li style="margin-bottom:0.25rem;"><strong>市盈率 (PE):</strong> {s.get('peRatio', 'N/A')}</li>
+                    <li style="margin-bottom:0.25rem;"><strong>市净率 (PB):</strong> {s.get('pbRatio', 'N/A')}</li>
+                    <li style="margin-bottom:0.25rem;"><strong>市销率 (PS):</strong> {s.get('psRatio', 'N/A')}</li>
+                    <li style="margin-bottom:0.25rem;"><strong>资产回报率 (ROE):</strong> {s.get('roeRatio', 'N/A')}</li>
+                    <li style="margin-bottom:0.25rem;"><strong>周涨跌:</strong> <span style="color:{get_change_color(s.get('weeklyChange'))};">{weekly_change_str}</span></li>
+                    <li style="margin-bottom:0.25rem;"><strong>月涨跌:</strong> <span style="color:{get_change_color(s.get('monthlyChange'))};">{monthly_change_str}</span></li>
+                </ul>
+                <p style="margin-top:0.75rem;font-size:0.875rem;color:#4b5563;"><strong>推荐理由:</strong> {s['reason']}</p>
+            </div>
+            """
+        html += '</div>'
+        return html
+            
+    daily_commentary_html = data['dailyCommentary'].replace('\n', '<br>')
+    us_stocks_html = format_stocks_html(data['usTop10Stocks'], '美股 (US)')
+    hk_stocks_html = format_stocks_html(data['hkTop10Stocks'], '港股 (HK)')
+    cn_stocks_html = format_stocks_html(data['cnTop10Stocks'], '沪深股市 (CN)')
+    
+    sentiment_color_map = {'利好': '#dcfce7', '利空': '#fee2e2', '中性': '#fef9c3'}
+    sentiment_text_color_map = {'利好': '#16a34a', '利空': '#dc2626', '中性': '#ca8a04'}
+    sentiment_bg = sentiment_color_map.get(data['overallSentiment'], '#f3f4f6')
+    sentiment_text = sentiment_text_color_map.get(data['overallSentiment'], '#374151')
+
+    html_content = f"""
+    <html>
+    <body style="font-family: 'Inter', sans-serif; background-color: #f9fafb; padding: 2rem;">
+        <div style="max-width: 800px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); padding: 2rem;">
+            <h1 style="text-align: center; font-size: 2.25rem; font-weight: 800; color: #111827; margin-bottom: 0.5rem;">每周金融分析报告</h1>
+            <p style="text-align: center; font-size: 1.125rem; color: #4b5563; margin-bottom: 2rem;">由 Gemini AI 自动生成</p>
+
+            <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); margin-bottom: 2rem;">
+                <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">整体市场情绪</h2>
+                <div style="font-size: 2.25rem; font-weight: bold; border-radius: 8px; padding: 1rem; margin-top: 1rem; text-align: center; background-color: {sentiment_bg}; color: {sentiment_text};">
+                    {data['overallSentiment']}
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr; gap: 2rem; margin-bottom: 2rem;">
+                <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                    <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">整体摘要</h2>
+                    <p style="margin-top: 1rem; color: #374151; line-height: 1.5;">{data['overallSummary']}</p>
+                </div>
+                <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                    <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">每周点评</h2>
+                    <p style="margin-top: 1rem; color: #374151; line-height: 1.5;">{daily_commentary_html}</p>
+                </div>
+            </div>
+
+            <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">中长线投资推荐</h2>
+                <div style="display: grid; grid-template-columns: 1fr; gap: 1.5rem; margin-top: 1.5rem;">
+                    {us_stocks_html}
+                    {hk_stocks_html}
+                    {cn_stocks_html}
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return html_content
+
+# --- 主执行函数 ---
+def main():
+    """主函数：按顺序执行所有任务"""
+    raw_text = _get_gemini_analysis()
+    if not raw_text:
+        return
+
+    analysis_data = _parse_gemini_response(raw_text)
+    if not analysis_data:
+        return
+
+    # 尝试将数据写入Firestore和Notion
+    firestore_success = _save_to_firestore(analysis_data)
+    notion_success = _save_to_notion(analysis_data)
+
+    # 检查所有任务是否成功
+    if firestore_success and notion_success:
+        subject = f"【理财分析】每周报告 - {datetime.now().strftime('%Y-%m-%d')}"
+        email_body = _generate_html_email_body(analysis_data)
+        send_email_notification(GMAIL_RECIPIENT_EMAILS, subject, email_body, is_html=True)
+    else:
+        # 如果任一任务失败，发送失败通知
+        error_msg = f"部分任务失败：Firestore写入{'成功' if firestore_success else '失败'}，Notion写入{'成功' if notion_success else '失败'}。"
+        send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务部分失败", error_msg)
 
 if __name__ == "__main__":
-    fetch_and_analyze_news()
+    main()
