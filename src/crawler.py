@@ -6,7 +6,7 @@ from email.mime.text import MIMEText
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import time
 import re
@@ -190,7 +190,7 @@ def _get_gemini_analysis():
         return None
 
 def _parse_gemini_response(raw_text):
-    """从原始文本中解析JSON数据"""
+    """从原始文本中解析JSON数据并添加日期前缀"""
     if not raw_text:
         return None
     
@@ -215,6 +215,14 @@ def _parse_gemini_response(raw_text):
 
         analysis_data = json.loads(json_text)
         print("成功解析 JSON 数据。")
+
+        # 添加日期信息前缀
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=6)
+        date_prefix = f"过去一周（{start_date.strftime('%Y年%m月%d日')}-{end_date.strftime('%d日')}）：\n\n"
+        
+        analysis_data['overallSummary'] = date_prefix + analysis_data['overallSummary']
+        
         return analysis_data
     except json.JSONDecodeError as e:
         error_msg = f"解析 JSON 失败: {e}\n\n原始文本:\n{raw_text}"
@@ -371,17 +379,17 @@ def main():
         return
 
     # Attempt to write data to Firestore and Notion
+    # As per the user's request, the outcome of Firestore write will be ignored for the email sending logic
     firestore_success = _save_to_firestore(analysis_data)
     notion_success = _save_to_notion(analysis_data)
 
-    # Check if all tasks were successful
-    if firestore_success and notion_success:
+    if notion_success:
         subject = f"【理财分析】每周报告 - {datetime.now().strftime('%Y-%m-%d')}"
         email_body = _generate_html_email_body(analysis_data)
         send_email_notification(GMAIL_RECIPIENT_EMAILS, subject, email_body, is_html=True)
     else:
-        # If any task fails, send a failure notification
-        error_msg = f"部分任务失败：Firestore写入{'成功' if firestore_success else '失败'}，Notion写入{'成功' if notion_success else '失败'}。"
+        # If Notion write failed, send a specific failure notification
+        error_msg = "部分任务失败：Notion写入失败。"
         send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务部分失败", error_msg)
 
 if __name__ == "__main__":
