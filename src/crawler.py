@@ -66,49 +66,7 @@ def fetch_and_analyze_news():
     """
     使用Gemini API同时完成新闻爬取和分析任务
     """
-    prompt_text = f"""
-    你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。请根据最新的财经新闻和市场数据，完成以下分析任务。
-
-    首先，从以下主流财经媒体和通讯社中获取最新的市场动态、政策变化和公司财报新闻：
-    - 美国：路透社 (Reuters)、华尔街日报 (The Wall Street Journal)、彭博社 (Bloomberg)
-    - 香港：路透社中文网、香港经济日报
-    - 大陆：新浪财经、东方财富网、证券时报
-
-    在获取了这些信息后，请完成以下分析：
-
-    1. **整体市场情绪和摘要：** 给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。
-    2. **每日点评与预判：** 针对前一日的美股、港股和大陆股市，给出专业的点评和对后续走势的预判。
-    3. **中长线投资推荐：** 选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码（不限于具体公司、指数或ETF），并为每个推荐给出简短的入选理由。
-
-    请将所有分析结果以严格的JSON格式返回，确保可直接解析。JSON对象的结构如下：
-
-    {{
-      "overallSentiment": "利好",
-      "overallSummary": "...",
-      "dailyCommentary": "...",
-      "usTop10Stocks": [
-        {{
-          "stockCode": "AAPL",
-          "reason": "..."
-        }},
-        ...
-      ],
-      "hkTop10Stocks": [
-        {{
-          "stockCode": "700.HK",
-          "reason": "..."
-        }},
-        ...
-      ],
-      "cnTop10Stocks": [
-        {{
-          "stockCode": "600519.SH",
-          "reason": "..."
-        }},
-        ...
-      ]
-    }}
-    """
+    prompt_text = "你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。请根据最新的财经新闻和市场数据，完成以下分析任务。首先，从以下主流财经媒体和通讯社中获取最新的市场动态、政策变化和公司财报新闻：- 美国：路透社 (Reuters)、华尔街日报 (The Wall Street Journal)、彭博社 (Bloomberg)- 香港：路透社中文网、香港经济日报- 大陆：新浪财经、东方财富网、证券时报。在获取了这些信息后，请完成以下分析：1. 整体市场情绪和摘要：给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。2. 每日点评与预判：针对前一日的美股、港股和大陆股市，给出专业的点评和对后续走势的预判。3. 中长线投资推荐：选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码（不限于具体公司、指数或ETF），并为每个推荐给出简短的入选理由。请将所有分析结果以严格的JSON格式返回，确保可直接解析。JSON对象的结构如下：{\"overallSentiment\": \"利好\",\"overallSummary\": \"...\",\"dailyCommentary\": \"...\",\"usTop10Stocks\": [{\"stockCode\": \"AAPL\",\"reason\": \"...\"},...],\"hkTop10Stocks\": [{\"stockCode\": \"700.HK\",\"reason\": \"...\"},...],\"cnTop10Stocks\": [{\"stockCode\": \"600519.SH\",\"reason\": \"...\"},...]}}"
     
     payload = {
         "contents": [{"parts": [{"text": prompt_text}]}],
@@ -126,6 +84,7 @@ def fetch_and_analyze_news():
     
     print("开始调用 Gemini API...")
     print(f"API URL: {api_url}")
+    print(f"请求负载: {json.dumps(payload, indent=2)}")
     try:
         response = requests.post(api_url, headers=headers, data=json.dumps(payload))
         response.raise_for_status()  # 检查HTTP错误
