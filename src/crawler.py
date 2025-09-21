@@ -67,7 +67,8 @@ def fetch_and_analyze_news():
     """
     使用Gemini API同时完成新闻爬取和分析任务
     """
-    prompt_text = "你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。请根据最新的财经新闻和市场数据，完成以下分析任务。首先，从以下主流财经媒体和通讯社中获取最新的市场动态、政策变化和公司财报新闻：- 美国：路透社 (Reuters)、华尔街日报 (The Wall Street Journal)、彭博社 (Bloomberg)- 香港：路透社中文网、香港经济日报- 大陆：新浪财经、东方财富网、证券时报。在获取了这些信息后，请完成以下分析：1. 整体市场情绪和摘要：给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。2. 每日点评与预判：针对前一日的美股、港股和大陆股市，给出专业的点评和对后续走势的预判。3. 中长线投资推荐：选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码（不限于具体公司、指数或ETF），并为每个推荐给出简短的入选理由。请将所有分析结果以严格的JSON格式返回，确保可直接解析。JSON对象的结构如下：{\"overallSentiment\": \"利好\",\"overallSummary\": \"...\",\"dailyCommentary\": \"...\",\"usTop10Stocks\": [{\"stockCode\": \"AAPL\",\"reason\": \"...\"},...],\"hkTop10Stocks\": [{\"stockCode\": \"700.HK\",\"reason\": \"...\"},...],\"cnTop10Stocks\": [{\"stockCode\": \"600519.SH\",\"reason\": \"...\"},...]}}"
+    # 调整提示词以获得更稳定的JSON输出
+    prompt_text = "你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。请根据你的知识库和可联网搜索到的过去一周的财经新闻和市场数据，完成以下分析任务。首先，从主流财经媒体和通讯社中获取最新的市场动态、政策变化和公司财报新闻。在获取了这些信息后，请完成以下分析：1. 整体市场情绪和摘要：给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。2. 每周点评与预判：给出对美股、港股和大陆股市的专业点评和对后续走势的预判。3. 中长线投资推荐：选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码（不限于具体公司、指数或ETF），并为每个推荐给出简短的入选理由。请将所有分析结果以严格的JSON格式返回，确保可直接解析。JSON对象的结构如下：{\"overallSentiment\": \"利好\",\"overallSummary\": \"...\",\"dailyCommentary\": \"...\",\"usTop10Stocks\": [{\"stockCode\": \"AAPL\",\"reason\": \"...\"},...],\"hkTop10Stocks\": [{\"stockCode\": \"700.HK\",\"reason\": \"...\"},...],\"cnTop10Stocks\": [{\"stockCode\": \"600519.SH\",\"reason\": \"...\"},...]}}"
     
     payload = {
         "contents": [{"parts": [{"text": prompt_text}]}],
@@ -112,14 +113,14 @@ def fetch_and_analyze_news():
             return # 退出函数
         
         # 写入Notion数据库
-        title = f"综合金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
+        title = f"每周金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
         link = "N/A" # 综合报告没有单一链接
         
         write_to_notion(title, link, analysis_data['overallSentiment'], analysis_data['overallSummary'], analysis_data['dailyCommentary'],
                         analysis_data['usTop10Stocks'], analysis_data['hkTop10Stocks'], analysis_data['cnTop10Stocks'])
         
         # 发送邮件通知
-        email_subject = f"【理财分析】综合报告 - {datetime.now().strftime('%Y-%m-%d')}"
+        email_subject = f"【理财分析】每周报告 - {datetime.now().strftime('%Y-%m-%d')}"
         email_body = (
             f"整体情绪：{analysis_data['overallSentiment']}\n\n"
             f"整体摘要：{analysis_data['overallSummary']}\n\n"
