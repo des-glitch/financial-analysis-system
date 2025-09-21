@@ -103,6 +103,7 @@ def send_email_notification(to_list, subject, message_text, is_html=False):
 # --- Core logic function: Call AI and parse data ---
 def _get_gemini_analysis():
     """Call the Gemini API and return the raw response text"""
+    # Updated JSON schema to include sourceLink
     json_schema = {
         "overallSentiment": "利好",
         "overallSummary": "...",
@@ -125,7 +126,8 @@ def _get_gemini_analysis():
                 "pbRatio": "...",
                 "weeklyChange": "...",
                 "monthlyChange": "...",
-                "reason": "..."
+                "reason": "...",
+                "sourceLink": "..."
             }
         ],
         "hkTop10Stocks": [
@@ -140,7 +142,8 @@ def _get_gemini_analysis():
                 "pbRatio": "...",
                 "weeklyChange": "...",
                 "monthlyChange": "...",
-                "reason": "..."
+                "reason": "...",
+                "sourceLink": "..."
             }
         ],
         "cnTop10Stocks": [
@@ -155,19 +158,26 @@ def _get_gemini_analysis():
                 "pbRatio": "...",
                 "weeklyChange": "...",
                 "monthlyChange": "...",
-                "reason": "..."
+                "reason": "...",
+                "sourceLink": "..."
             }
         ]
     }
     
-    # 优化后的提示词
+    # Updated prompt with new instructions for data sourcing
     prompt_prefix = """
 你是一名资深金融分析师。你必须严格根据可联网搜索到的过去一周（七天）的财经新闻和市场数据进行分析。
 
 请完成以下分析任务：
 1. **整体市场情绪和摘要**：给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。
 2. **每周点评与预判**：给出对美股、港股和大陆股市的专业点评和对后续走势的预判。请将此部分内容格式化为清晰的文本，用“美股市场点评：”等标题区分。
-3. **中长线投资推荐**：选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码，并为每个推荐给出对应的公司中文名称、市值、市盈率、市净率、市销率、资产回报率以及过去一周和过去一个月的涨跌情况。**请务必使用你能够找到的最近的股票价格，并注明该价格的获取日期。**同时，为每个推荐给出简短的入选理由（**每个理由请控制在200字以内**）。
+3. **中长线投资推荐**：
+   - 选出美股、港股和中国沪深股市各10个值得中长线买入的股票。
+   - **核心要求**：你必须从**权威的金融网站**（例如：Bloomberg, Reuters, Yahoo Finance, Investopedia, Seeking Alpha, Snowball Finance等）获取最新的股票信息。
+   - 为每个推荐提供对应的公司中文名称、市值、市盈率、市净率、市销率、资产回报率以及过去一周和过去一个月的涨跌情况。
+   - **请务必使用你能够找到的最近的股票价格，并注明该价格的获取日期。**
+   - 同时，为每个推荐给出简短的入选理由（每个理由请控制在200字以内）。
+   - **新增要求**：为每一支股票提供一个 `sourceLink` 字段，其值为你获取该股票数据的**权威链接**。
 4. **相关资讯链接**：提供你所分析的市场的相关财经资讯链接，包括美股、港股和沪深股市。
 
 你**不允许**在JSON结构的前后添加任何额外文本、解释或免责声明。请将所有分析结果以**严格的JSON格式**返回，确保可直接解析。JSON对象的结构如下：
@@ -326,9 +336,12 @@ def _generate_html_email_body(data):
             weekly_change_str = f'{weekly_change}%' if isinstance(weekly_change, (int, float)) else weekly_change
             monthly_change_str = f'{monthly_change}%' if isinstance(monthly_change, (int, float)) else monthly_change
             
+            # Use sourceLink if available
+            stock_code_html = f'<a href="{s.get("sourceLink", "#")}" style="color: #2563eb; font-weight: 600; text-decoration: none;">{s["stockCode"]}</a>' if s.get('sourceLink') else f'{s["stockCode"]}'
+            
             html += f"""
                         <tr style="background-color:{row_bg_color};">
-                            <td style="padding: 0.75rem; border-top: 1px solid #e5e7eb; font-weight: 600;">{s['stockCode']}<br>{s['companyName']}</td>
+                            <td style="padding: 0.75rem; border-top: 1px solid #e5e7eb; font-weight: 600;">{stock_code_html}<br>{s['companyName']}</td>
                             <td style="padding: 0.75rem; border-top: 1px solid #e5e7eb;">价格: {s.get('price', 'N/A')}<br>市值: {s.get('marketCap', 'N/A')}</td>
                             <td style="padding: 0.75rem; border-top: 1px solid #e5e7eb;">
                                 PE: {s.get('peRatio', 'N/A')}<br>
