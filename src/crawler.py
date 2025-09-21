@@ -251,31 +251,26 @@ def _save_to_firestore(data):
 
 def _save_to_notion(data):
     """Save data to Notion database"""
+    # Helper to convert stock list to a simple string
+    def stocks_to_string(stocks_list):
+        return ", ".join([f"{s['stockCode']} ({s['companyName']})" for s in stocks_list])
+
     try:
         title = f"每周金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
-        link = "N/A"
         
-        def process_stocks_for_notion(stocks_list, max_len=1900):
-            """Convert stock recommendation list to a JSON string and ensure it doesn't exceed max_len"""
-            json_str = json.dumps(stocks_list, indent=2, ensure_ascii=False)
-            if len(json_str) > max_len:
-                print(f"Stock list JSON string is too long ({len(json_str)}), truncating...")
-                truncated_str = json_str[:max_len-5] + '...' + json_str[-2:]
-                return truncated_str
-            return json_str
-
-        us_stocks_notion = process_stocks_for_notion(data['usTop10Stocks'])
-        hk_stocks_notion = process_stocks_for_notion(data['hkTop10Stocks'])
-        cn_stocks_notion = process_stocks_for_notion(data['cnTop10Stocks'])
-
+        us_stocks_notion = stocks_to_string(data.get('usTop10Stocks', []))
+        hk_stocks_notion = stocks_to_string(data.get('hkTop10Stocks', []))
+        cn_stocks_notion = stocks_to_string(data.get('cnTop10Stocks', []))
+        
+        # Ensure all required properties exist in Notion, otherwise this will fail
         notion.pages.create(
             parent={"database_id": NOTION_DATABASE_ID},
             properties={
                 "Title": {"title": [{"text": {"content": title}}]},
-                "URL": {"url": link},
                 "OverallSentiment": {"select": {"name": data['overallSentiment']}},
                 "OverallSummary": {"rich_text": [{"text": {"content": data['overallSummary']}}]},
                 "DailyCommentary": {"rich_text": [{"text": {"content": data['dailyCommentary']}}]},
+                # Convert stock lists to simple strings to avoid length issues
                 "usTop10Stocks": {"rich_text": [{"text": {"content": us_stocks_notion}}]},
                 "hkTop10Stocks": {"rich_text": [{"text": {"content": hk_stocks_notion}}]},
                 "cnTop10Stocks": {"rich_text": [{"text": {"content": cn_stocks_notion}}]},
@@ -286,6 +281,8 @@ def _save_to_notion(data):
         return True
     except Exception as e:
         print(f"Failed to write to Notion: {e}")
+        # Add a more specific error log for Notion API
+        print(f"Notion API write failed. Please check if your Notion database properties (e.g., 'Title', 'usTop10Stocks') exist and have the correct names and types (rich_text).")
         return False
 
 def _generate_html_email_body(data):
