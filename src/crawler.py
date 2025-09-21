@@ -270,6 +270,9 @@ def fetch_and_analyze_news():
                     """
                 html += '</div>'
                 return html
+                
+            # 将字符串替换操作移动到 f-string 之外，以避免语法错误。
+            daily_commentary_html = data['dailyCommentary'].replace('\n', '<br>')
 
             us_stocks_html = format_stocks_html(data['usTop10Stocks'], '美股 (US)')
             hk_stocks_html = format_stocks_html(data['hkTop10Stocks'], '港股 (HK)')
@@ -301,7 +304,7 @@ def fetch_and_analyze_news():
                         </div>
                         <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
                             <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">每周点评</h2>
-                            <p style="margin-top: 1rem; color: #374151; line-height: 1.5;">{data['dailyCommentary'].replace('\\n', '<br>')}</p>
+                            <p style="margin-top: 1rem; color: #374151; line-height: 1.5;">{daily_commentary_html}</p>
                         </div>
                     </div>
 
