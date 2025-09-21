@@ -36,7 +36,7 @@ def get_gmail_service():
         refresh_token=GMAIL_REFRESH_TOKEN,
         client_id=GMAIL_CLIENT_ID,
         client_secret=GMAIL_CLIENT_SECRET,
-        token_uri="[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)"
+        token_uri="https://oauth2.googleapis.com/token"
     )
     # 使用刷新令牌获取新的访问令牌
     creds.refresh(Request())
@@ -78,7 +78,7 @@ def fetch_and_analyze_news():
         "Content-Type": "application/json"
     }
 
-    api_url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=){GEMINI_API_KEY}"
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={GEMINI_API_KEY}"
     
     print("开始调用 Gemini API...")
     print(f"API URL: {api_url}")
