@@ -124,13 +124,17 @@ def fetch_and_analyze_news():
 
     api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={GEMINI_API_KEY}"
     
+    print("开始调用 Gemini API...")
+    print(f"API URL: {api_url}")
     try:
         response = requests.post(api_url, headers=headers, data=json.dumps(payload))
         response.raise_for_status()  # 检查HTTP错误
         
         result_json = response.json()
+        print("成功从 Gemini API 获取响应。")
         
         analysis_data = json.loads(result_json['candidates'][0]['content']['parts'][0]['text'])
+        print("成功解析 JSON 数据。")
         
         # 写入Notion数据库
         title = f"综合金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
