@@ -12,8 +12,8 @@ import time
 import re
 from firebase_admin import credentials, initialize_app, firestore
 
-# --- 配置部分 ---
-# 从GitHub Actions Secrets获取环境变量
+# --- Configuration ---
+# Get environment variables from GitHub Actions Secrets
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 
@@ -21,49 +21,49 @@ GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID")
 GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET")
 GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN")
 
-# 修复了环境变量名称不匹配的问题，同时支持单个或多个邮件地址
+# Fix inconsistent environment variable name, also support a single email address
 gmail_emails_str = os.environ.get("GMAIL_RECIPIENT_EMAILS") or os.environ.get("GMAIL_RECIPIENT_EMAIL")
 if gmail_emails_str:
     GMAIL_RECIPIENT_EMAILS = [email.strip() for email in gmail_emails_str.split(',')]
 else:
     GMAIL_RECIPIENT_EMAILS = []
 
-# 从环境变量中获取Firebase配置
+# Get Firebase config from environment variables
 FIREBASE_CONFIG_JSON = os.environ.get("FIREBASE_CONFIG_JSON")
-# 这两个变量在Canvas环境中会自动提供
+# These two variables are automatically provided in the Canvas environment
 APP_ID = os.environ.get("__app_id")
 FIREBASE_CONFIG = os.environ.get("__firebase_config")
 
-# --- Gemini API配置 ---
+# --- Gemini API Configuration ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# --- 初始化客户端 ---
-# 初始化Notion客户端
+# --- Initialize clients ---
+# Initialize Notion client
 notion = Client(auth=NOTION_TOKEN)
 
-# 初始化Firebase Admin SDK
-# 如果在Canvas环境外运行，需要使用`FIREBASE_CONFIG_JSON`
-# 如果在Canvas环境内运行，则此段代码不会执行，因为Canvas已配置
+# Initialize Firebase Admin SDK
+# If running outside the Canvas environment, use `FIREBASE_CONFIG_JSON`
+# If running in the Canvas environment, this block will be skipped
 if not FIREBASE_CONFIG:
     if FIREBASE_CONFIG_JSON:
         try:
             cred = credentials.Certificate(json.loads(FIREBASE_CONFIG_JSON))
             initialize_app(cred)
             db = firestore.client()
-            print("Firebase Admin SDK 初始化成功。")
+            print("Firebase Admin SDK initialized successfully.")
         except Exception as e:
-            print(f"Firebase Admin SDK 初始化失败: {e}")
+            print(f"Failed to initialize Firebase Admin SDK: {e}")
             db = None
     else:
-        print("未检测到 FIREBASE_CONFIG_JSON 环境变量，Firebase Admin SDK 未初始化。")
+        print("FIREBASE_CONFIG_JSON environment variable not found. Firebase Admin SDK not initialized.")
         db = None
 else:
-    # 在Canvas环境中，我们不使用Admin SDK，只准备好数据路径
+    # In the Canvas environment, we don't use the Admin SDK, just prepare the data path
     db = None
 
-# --- Gmail API认证 ---
+# --- Gmail API authentication ---
 def get_gmail_service():
-    """使用OAuth2凭证获取Gmail服务实例"""
+    """Get a Gmail service instance using OAuth2 credentials"""
     creds = Credentials(
         token=None,
         refresh_token=GMAIL_REFRESH_TOKEN,
@@ -71,13 +71,13 @@ def get_gmail_service():
         client_secret=GMAIL_CLIENT_SECRET,
         token_uri="https://oauth2.googleapis.com/token"
     )
-    # 使用刷新令牌获取新的访问令牌
-    creds.refresh(Request())
+    # Use the refresh token to get a new access token
+    creds.refresh(google.auth.transport.requests.Request())
     service = build("gmail", "v1", credentials=creds)
     return service
 
 def create_message(sender, to, subject, message_text, subtype="plain"):
-    """创建一个MIMEText消息对象，支持指定子类型"""
+    """Create a MIMEText message object, supporting a specified subtype"""
     message = MIMEText(message_text, subtype)
     message["to"] = to
     message["from"] = sender
@@ -85,25 +85,24 @@ def create_message(sender, to, subject, message_text, subtype="plain"):
     return {"raw": base64.urlsafe_b64encode(message.as_bytes()).decode()}
 
 def send_email_notification(to_list, subject, message_text, is_html=False):
-    """使用Gmail API发送邮件"""
+    """Send an email using the Gmail API"""
     if not to_list:
-        print("未指定收件人邮箱，跳过邮件发送。")
+        print("No recipient emails specified, skipping email sending.")
         return
         
     try:
         service = get_gmail_service()
         for to in to_list:
-            # 'me' 指的是经过身份验证的用户邮箱地址
+            # 'me' refers to the authenticated user's email address
             message = create_message("me", to.strip(), subject, message_text, "html" if is_html else "plain")
             service.users().messages().send(userId="me", body=message).execute()
-            print(f"成功发送邮件至: {to.strip()}")
+            print(f"Successfully sent email to: {to.strip()}")
     except Exception as e:
-        print(f"发送邮件失败: {e}")
+        print(f"Failed to send email: {e}")
 
-
-# --- 核心逻辑函数：调用AI并解析数据 ---
+# --- Core logic function: Call AI and parse data ---
 def _get_gemini_analysis():
-    """调用Gemini API并返回原始响应文本"""
+    """Call the Gemini API and return the raw response text"""
     json_schema = {
         "overallSentiment": "利好",
         "overallSummary": "...",
@@ -194,16 +193,26 @@ def _parse_gemini_response(raw_text):
     """从原始文本中解析JSON数据"""
     if not raw_text:
         return None
-        
-    json_match = re.search(r'\{.*?\}', raw_text, re.DOTALL)
-    if json_match:
-        json_text = json_match.group(0)
-        print("成功提取JSON内容。")
-    else:
-        json_text = raw_text
-        print("未能提取到有效的JSON块，将尝试解析整个响应。")
     
+    # 更健壮的 JSON 提取，从第一个 { 开始查找
     try:
+        json_start_index = raw_text.find('{')
+        if json_start_index != -1:
+            json_text = raw_text[json_start_index:]
+            # 确保结尾是合法的 JSON 对象
+            if json_text.endswith('}'):
+                print("成功提取JSON内容。")
+            else:
+                # 尝试通过正则表达式匹配
+                json_match = re.search(r'\{.*\}', json_text, re.DOTALL)
+                if json_match:
+                    json_text = json_match.group(0)
+                    print("通过正则表达式成功提取JSON内容。")
+                else:
+                    raise json.JSONDecodeError("无法在文本中找到有效的JSON对象", raw_text, 0)
+        else:
+            raise json.JSONDecodeError("无法在文本中找到有效的JSON对象", raw_text, 0)
+
         analysis_data = json.loads(json_text)
         print("成功解析 JSON 数据。")
         return analysis_data
@@ -213,32 +222,32 @@ def _parse_gemini_response(raw_text):
         send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务失败", error_msg)
         return None
 
-# --- 存储和通知函数 ---
+# --- Storage and Notification Functions ---
 def _save_to_firestore(data):
-    """将数据写入Firestore数据库"""
+    """Save data to Firestore database"""
     if not db:
-        print("Firestore Admin SDK 未初始化，跳过写入。")
-        return
+        print("Firestore Admin SDK not initialized, skipping write.")
+        return False
     try:
         doc_ref = db.collection('artifacts').document(APP_ID).collection('public').document('data').collection('finance_reports').document('latest')
         doc_ref.set(data)
-        print("成功将数据写入Firestore。")
+        print("Successfully wrote data to Firestore.")
         return True
     except Exception as e:
-        print(f"写入Firestore失败: {e}")
+        print(f"Failed to write to Firestore: {e}")
         return False
 
 def _save_to_notion(data):
-    """将数据写入Notion数据库"""
+    """Save data to Notion database"""
     try:
         title = f"每周金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
         link = "N/A"
         
         def process_stocks_for_notion(stocks_list, max_len=1900):
-            """将股票推荐列表转换为JSON字符串并确保长度不超过max_len"""
+            """Convert stock recommendation list to a JSON string and ensure it doesn't exceed max_len"""
             json_str = json.dumps(stocks_list, indent=2, ensure_ascii=False)
             if len(json_str) > max_len:
-                print(f"股票列表JSON字符串长度过长（{len(json_str)}），正在截断...")
+                print(f"Stock list JSON string is too long ({len(json_str)}), truncating...")
                 truncated_str = json_str[:max_len-5] + '...' + json_str[-2:]
                 return truncated_str
             return json_str
@@ -261,14 +270,14 @@ def _save_to_notion(data):
                 "CrawledDate": {"date": {"start": datetime.now().isoformat()}}
             }
         )
-        print(f"成功写入Notion：{title}")
+        print(f"Successfully wrote to Notion: {title}")
         return True
     except Exception as e:
-        print(f"写入Notion失败：{e}")
+        print(f"Failed to write to Notion: {e}")
         return False
 
 def _generate_html_email_body(data):
-    """生成HTML格式的邮件正文"""
+    """Generate the HTML body for the email"""
     def get_change_color(change):
         if isinstance(change, (int, float)):
             if change > 0: return "#16a34a"
@@ -350,9 +359,9 @@ def _generate_html_email_body(data):
     """
     return html_content
 
-# --- 主执行函数 ---
+# --- Main execution function ---
 def main():
-    """主函数：按顺序执行所有任务"""
+    """Main function: execute all tasks sequentially"""
     raw_text = _get_gemini_analysis()
     if not raw_text:
         return
@@ -361,17 +370,17 @@ def main():
     if not analysis_data:
         return
 
-    # 尝试将数据写入Firestore和Notion
+    # Attempt to write data to Firestore and Notion
     firestore_success = _save_to_firestore(analysis_data)
     notion_success = _save_to_notion(analysis_data)
 
-    # 检查所有任务是否成功
+    # Check if all tasks were successful
     if firestore_success and notion_success:
         subject = f"【理财分析】每周报告 - {datetime.now().strftime('%Y-%m-%d')}"
         email_body = _generate_html_email_body(analysis_data)
         send_email_notification(GMAIL_RECIPIENT_EMAILS, subject, email_body, is_html=True)
     else:
-        # 如果任一任务失败，发送失败通知
+        # If any task fails, send a failure notification
         error_msg = f"部分任务失败：Firestore写入{'成功' if firestore_success else '失败'}，Notion写入{'成功' if notion_success else '失败'}。"
         send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务部分失败", error_msg)
 
