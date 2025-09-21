@@ -32,6 +32,8 @@ jobs:
           GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
           GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
           GMAIL_RECIPIENT_EMAIL: ${{ secrets.GMAIL_RECIPIENT_EMAIL }}
+          # 修复了环境变量名称不匹配的问题
+          GMAIL_RECIPIENT_EMAILS: ${{ secrets.GMAIL_RECIPIENT_EMAILS }}
           # Gemini API 密钥
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
