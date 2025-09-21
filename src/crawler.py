@@ -154,15 +154,16 @@ def _get_gemini_analysis():
         ]
     }
 
+    # 优化后的提示词
     prompt_prefix = """
-你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。
-请根据你的知识库和可联网搜索到的过去一周的财经新闻和市场数据，完成以下分析任务。
-首先，从主流财经媒体和通讯社中获取最新的市场动态、政策变化和公司财报新闻。
-在获取了这些信息后，请完成以下分析：
-1. 整体市场情绪和摘要：给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。
-2. 每周点评与预判：给出对美股、港股和大陆股市的专业点评和对后续走势的预判。请将此部分内容格式化为清晰的文本，用“美股市场点评：”等标题区分。
-3. 中长线投资推荐：选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码，并为每个推荐给出对应的公司中文名称、当前股票价格、市值、市盈率、市净率、市销率、资产回报率以及过去一周和过去一个月的涨跌情况。同时，为每个推荐给出简短的入选理由（**每个理由请控制在200字以内**）。
-请将所有分析结果以严格的JSON格式返回，确保可直接解析。JSON对象的结构如下：
+你是一名资深金融分析师。你必须严格根据可联网搜索到的过去一周（七天）的财经新闻和市场数据进行分析。
+
+请完成以下分析任务：
+1. **整体市场情绪和摘要**：给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。
+2. **每周点评与预判**：给出对美股、港股和大陆股市的专业点评和对后续走势的预判。请将此部分内容格式化为清晰的文本，用“美股市场点评：”等标题区分。
+3. **中长线投资推荐**：选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码，并为每个推荐给出对应的公司中文名称、当前股票价格、市值、市盈率、市净率、市销率、资产回报率以及过去一周和过去一个月的涨跌情况。同时，为每个推荐给出简短的入选理由（**每个理由请控制在200字以内**）。
+
+你**不允许**在JSON结构的前后添加任何额外文本、解释或免责声明。请将所有分析结果以**严格的JSON格式**返回，确保可直接解析。JSON对象的结构如下：
 """
     
     prompt_text = f"{prompt_prefix}{json.dumps(json_schema, indent=4, ensure_ascii=False)}"
@@ -194,25 +195,21 @@ def _parse_gemini_response(raw_text):
     if not raw_text:
         return None
     
-    # 更健壮的 JSON 提取，从第一个 { 开始查找
+    # --- 优化后的JSON解析逻辑 ---
+    # 找到第一个 '{' 和最后一个 '}'，并提取中间的字符串
     try:
         json_start_index = raw_text.find('{')
-        if json_start_index != -1:
-            json_text = raw_text[json_start_index:]
-            # 确保结尾是合法的 JSON 对象
-            if json_text.endswith('}'):
-                print("成功提取JSON内容。")
-            else:
-                # 尝试通过正则表达式匹配
-                json_match = re.search(r'\{.*\}', json_text, re.DOTALL)
-                if json_match:
-                    json_text = json_match.group(0)
-                    print("通过正则表达式成功提取JSON内容。")
-                else:
-                    raise json.JSONDecodeError("无法在文本中找到有效的JSON对象", raw_text, 0)
-        else:
-            raise json.JSONDecodeError("无法在文本中找到有效的JSON对象", raw_text, 0)
-
+        if json_start_index == -1:
+            raise ValueError("无法在文本中找到JSON的起始字符 '{'")
+            
+        # 寻找最外层的最后一个 '}'
+        json_end_index = raw_text.rfind('}')
+        if json_end_index == -1 or json_end_index < json_start_index:
+            raise ValueError("无法在文本中找到JSON的结束字符 '}'")
+            
+        json_text = raw_text[json_start_index : json_end_index + 1]
+        
+        # 验证提取的文本是否为有效的 JSON
         analysis_data = json.loads(json_text)
         print("成功解析 JSON 数据。")
 
@@ -224,7 +221,7 @@ def _parse_gemini_response(raw_text):
         analysis_data['overallSummary'] = date_prefix + analysis_data['overallSummary']
         
         return analysis_data
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, ValueError) as e:
         error_msg = f"解析 JSON 失败: {e}\n\n原始文本:\n{raw_text}"
         print(error_msg)
         send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务失败", error_msg)
