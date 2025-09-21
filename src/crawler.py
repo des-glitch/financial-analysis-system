@@ -76,7 +76,7 @@ def get_gmail_service():
         token_uri="https://oauth2.googleapis.com/token"
     )
     # Use the refresh token to get a new access token
-    creds.refresh(google.auth.transport.requests.Request())
+    creds.refresh(Request())
     service = build("gmail", "v1", credentials=creds)
     return service
 
