@@ -68,7 +68,7 @@ def fetch_and_analyze_news():
     使用Gemini API同时完成新闻爬取和分析任务
     """
     # 调整提示词以获得更稳定的JSON输出
-    prompt_text = "你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。请根据你的知识库和可联网搜索到的过去一周的财经新闻和市场数据，完成以下分析任务。首先，从主流财经媒体和通讯社中获取最新的市场动态、政策变化和公司财报新闻。在获取了这些信息后，请完成以下分析：1. 整体市场情绪和摘要：给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。2. 每周点评与预判：给出对美股、港股和大陆股市的专业点评和对后续走势的预判。3. 中长线投资推荐：选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码（不限于具体公司、指数或ETF），并为每个推荐给出简短的入选理由。请将所有分析结果以严格的JSON格式返回，确保可直接解析。JSON对象的结构如下：{\"overallSentiment\": \"利好\",\"overallSummary\": \"...\",\"dailyCommentary\": \"...\",\"usTop10Stocks\": [{\"stockCode\": \"AAPL\",\"reason\": \"...\"},...],\"hkTop10Stocks\": [{\"stockCode\": \"700.HK\",\"reason\": \"...\"},...],\"cnTop10Stocks\": [{\"stockCode\": \"600519.SH\",\"reason\": \"...\"},...]}}"
+    prompt_text = "你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。请根据你的知识库和可联网搜索到的过去一周的财经新闻和市场数据，完成以下分析任务。首先，从主流财经媒体和通讯社中获取最新的市场动态、政策变化和公司财报新闻。在获取了这些信息后，请完成以下分析：1. 整体市场情绪和摘要：给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。2. 每周点评与预判：给出对美股、港股和大陆股市的专业点评和对后续走势的预判。3. 中长线投资推荐：选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码（不限于具体公司、指数或ETF），并为每个推荐给出简短的入选理由（**每个理由请控制在200字以内**）。请将所有分析结果以严格的JSON格式返回，确保可直接解析。JSON对象的结构如下：{\"overallSentiment\": \"利好\",\"overallSummary\": \"...\",\"dailyCommentary\": \"...\",\"usTop10Stocks\": [{\"stockCode\": \"AAPL\",\"reason\": \"...\"},...],\"hkTop10Stocks\": [{\"stockCode\": \"700.HK\",\"reason\": \"...\"},...],\"cnTop10Stocks\": [{\"stockCode\": \"600519.SH\",\"reason\": \"...\"},...]}}"
     
     payload = {
         "contents": [{"parts": [{"text": prompt_text}]}],
@@ -116,8 +116,27 @@ def fetch_and_analyze_news():
         title = f"每周金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
         link = "N/A" # 综合报告没有单一链接
         
+        # --- 新增：处理股票推荐数据以适应Notion富文本限制 ---
+        def process_stocks_for_notion(stocks_list, max_len=1900):
+            """将股票推荐列表转换为JSON字符串并确保长度不超过max_len"""
+            # 尝试生成JSON字符串
+            json_str = json.dumps(stocks_list, indent=2, ensure_ascii=False)
+            
+            # 如果字符串过长，则截断
+            if len(json_str) > max_len:
+                print(f"股票列表JSON字符串长度过长（{len(json_str)}），正在截断...")
+                # 简单截断，保留JSON结构
+                truncated_str = json_str[:max_len-5] + '...' + json_str[-2:]
+                return truncated_str
+            return json_str
+
+        us_stocks_notion = process_stocks_for_notion(analysis_data['usTop10Stocks'])
+        hk_stocks_notion = process_stocks_for_notion(analysis_data['hkTop10Stocks'])
+        cn_stocks_notion = process_stocks_for_notion(analysis_data['cnTop10Stocks'])
+        # --- 新增结束 ---
+
         write_to_notion(title, link, analysis_data['overallSentiment'], analysis_data['overallSummary'], analysis_data['dailyCommentary'],
-                        analysis_data['usTop10Stocks'], analysis_data['hkTop10Stocks'], analysis_data['cnTop10Stocks'])
+                        us_stocks_notion, hk_stocks_notion, cn_stocks_notion)
         
         # 发送邮件通知
         email_subject = f"【理财分析】每周报告 - {datetime.now().strftime('%Y-%m-%d')}"
@@ -149,9 +168,9 @@ def write_to_notion(title, url, overallSentiment, overallSummary, dailyCommentar
                 "OverallSentiment": {"select": {"name": overallSentiment}},
                 "OverallSummary": {"rich_text": [{"text": {"content": overallSummary}}]},
                 "DailyCommentary": {"rich_text": [{"text": {"content": dailyCommentary}}]},
-                "usTop10Stocks": {"rich_text": [{"text": {"content": json.dumps(usTop10Stocks)}}]},
-                "hkTop10Stocks": {"rich_text": [{"text": {"content": json.dumps(hkTop10Stocks)}}]},
-                "cnTop10Stocks": {"rich_text": [{"text": {"content": json.dumps(cnTop10Stocks)}}]},
+                "usTop10Stocks": {"rich_text": [{"text": {"content": usTop10Stocks}}]},
+                "hkTop10Stocks": {"rich_text": [{"text": {"content": hkTop10Stocks}}]},
+                "cnTop10Stocks": {"rich_text": [{"text": {"content": cnTop10Stocks}}]},
                 "CrawledDate": {"date": {"start": datetime.now().isoformat()}}
             }
         )
