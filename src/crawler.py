@@ -36,7 +36,7 @@ def get_gmail_service():
         refresh_token=GMAIL_REFRESH_TOKEN,
         client_id=GMAIL_CLIENT_ID,
         client_secret=GMAIL_CLIENT_SECRET,
-        token_uri="https://oauth2.googleapis.com/token"
+        token_uri="[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)"
     )
     # 使用刷新令牌获取新的访问令牌
     creds.refresh(Request())
@@ -78,7 +78,7 @@ def fetch_and_analyze_news():
         "Content-Type": "application/json"
     }
 
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={GEMINI_API_KEY}"
+    api_url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=){GEMINI_API_KEY}"
     
     print("开始调用 Gemini API...")
     print(f"API URL: {api_url}")
@@ -92,12 +92,16 @@ def fetch_and_analyze_news():
         print("成功从 Gemini API 获取响应。")
         print(f"原始响应文本: {raw_text}")
         
-        # 尝试从原始文本中提取JSON代码块
-        json_match = re.search(r'```json\n(.*)\n```', raw_text, re.DOTALL)
-        if json_match:
-            json_text = json_match.group(1)
+        # 尝试从原始文本中提取JSON对象
+        json_start_index = raw_text.find('{')
+        json_end_index = raw_text.rfind('}')
+        
+        if json_start_index != -1 and json_end_index != -1 and json_end_index > json_start_index:
+            json_text = raw_text[json_start_index:json_end_index + 1]
+            print("成功提取JSON内容。")
         else:
-            json_text = raw_text # 如果没有代码块，则尝试直接解析整个文本
+            json_text = raw_text
+            print("未能提取到有效的JSON块，将尝试解析整个响应。")
         
         try:
             analysis_data = json.loads(json_text)
