@@ -19,7 +19,8 @@ NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID")
 GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET")
 GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN")
-GMAIL_RECIPIENT_EMAIL = os.environ.get("GMAIL_RECIPIENT_EMAIL")
+# 这是一个逗号分隔的邮箱地址列表
+GMAIL_RECIPIENT_EMAILS = os.environ.get("GMAIL_RECIPIENT_EMAILS").split(',')
 
 # --- Gemini API配置 ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -43,22 +44,23 @@ def get_gmail_service():
     service = build("gmail", "v1", credentials=creds)
     return service
 
-def create_message(sender, to, subject, message_text):
-    """创建一个MIMEText消息对象"""
-    message = MIMEText(message_text)
+def create_message(sender, to, subject, message_text, subtype="plain"):
+    """创建一个MIMEText消息对象，支持指定子类型"""
+    message = MIMEText(message_text, subtype)
     message["to"] = to
     message["from"] = sender
     message["subject"] = subject
     return {"raw": base64.urlsafe_b64encode(message.as_bytes()).decode()}
 
-def send_email_notification(to, subject, message_text):
+def send_email_notification(to_list, subject, message_text, is_html=False):
     """使用Gmail API发送邮件"""
     try:
         service = get_gmail_service()
-        # 'me' 指的是经过身份验证的用户邮箱地址
-        message = create_message("me", to, subject, message_text)
-        service.users().messages().send(userId="me", body=message).execute()
-        print(f"成功发送邮件至: {to}")
+        for to in to_list:
+            # 'me' 指的是经过身份验证的用户邮箱地址
+            message = create_message("me", to.strip(), subject, message_text, "html" if is_html else "plain")
+            service.users().messages().send(userId="me", body=message).execute()
+            print(f"成功发送邮件至: {to.strip()}")
     except Exception as e:
         print(f"发送邮件失败: {e}")
 
@@ -109,7 +111,7 @@ def fetch_and_analyze_news():
             print("成功解析 JSON 数据。")
         except json.JSONDecodeError as e:
             print(f"解析 JSON 失败: {e}")
-            send_email_notification(GMAIL_RECIPIENT_EMAIL, "理财分析任务失败", f"解析 JSON 失败: {e}\n\n原始文本:\n{raw_text}")
+            send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务失败", f"解析 JSON 失败: {e}\n\n原始文本:\n{raw_text}")
             return # 退出函数
         
         # 写入Notion数据库
@@ -137,23 +139,88 @@ def fetch_and_analyze_news():
 
         write_to_notion(title, link, analysis_data['overallSentiment'], analysis_data['overallSummary'], analysis_data['dailyCommentary'],
                         us_stocks_notion, hk_stocks_notion, cn_stocks_notion)
+
+        # --- 新增：生成HTML邮件内容 ---
+        def generate_html_email_body(data):
+            """生成HTML格式的邮件正文"""
+            us_stocks_html = "".join([f'<div style="background-color:#f9fafb;border-radius:8px;padding:1rem;box-shadow:0 1px 2px rgba(0,0,0,0.05);margin-bottom:1rem;">'
+                                      f'<h3 style="font-size:1.125rem;font-weight:600;color:#111827;">{s["companyName"]} ({s["stockCode"]})</h3>'
+                                      f'<p style="margin-top:0.25rem;font-size:0.875rem;color:#4b5563;">{s["reason"]}</p>'
+                                      f'</div>' for s in data['usTop10Stocks']])
+
+            hk_stocks_html = "".join([f'<div style="background-color:#f9fafb;border-radius:8px;padding:1rem;box-shadow:0 1px 2px rgba(0,0,0,0.05);margin-bottom:1rem;">'
+                                      f'<h3 style="font-size:1.125rem;font-weight:600;color:#111827;">{s["companyName"]} ({s["stockCode"]})</h3>'
+                                      f'<p style="margin-top:0.25rem;font-size:0.875rem;color:#4b5563;">{s["reason"]}</p>'
+                                      f'</div>' for s in data['hkTop10Stocks']])
+
+            cn_stocks_html = "".join([f'<div style="background-color:#f9fafb;border-radius:8px;padding:1rem;box-shadow:0 1px 2px rgba(0,0,0,0.05);margin-bottom:1rem;">'
+                                      f'<h3 style="font-size:1.125rem;font-weight:600;color:#111827;">{s["companyName"]} ({s["stockCode"]})</h3>'
+                                      f'<p style="margin-top:0.25rem;font-size:0.875rem;color:#4b5563;">{s["reason"]}</p>'
+                                      f'</div>' for s in data['cnTop10Stocks']])
+            
+            sentiment_color_map = {'利好': '#dcfce7', '利空': '#fee2e2', '中性': '#fef9c3'}
+            sentiment_text_color_map = {'利好': '#16a34a', '利空': '#dc2626', '中性': '#ca8a04'}
+            sentiment_bg = sentiment_color_map.get(data['overallSentiment'], '#f3f4f6')
+            sentiment_text = sentiment_text_color_map.get(data['overallSentiment'], '#374151')
+
+            html_content = f"""
+            <html>
+            <body style="font-family: 'Inter', sans-serif; background-color: #f9fafb; padding: 2rem;">
+                <div style="max-width: 800px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); padding: 2rem;">
+                    <h1 style="text-align: center; font-size: 2.25rem; font-weight: 800; color: #111827; margin-bottom: 0.5rem;">每周金融分析报告</h1>
+                    <p style="text-align: center; font-size: 1.125rem; color: #4b5563; margin-bottom: 2rem;">由 Gemini AI 自动生成</p>
+
+                    <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); margin-bottom: 2rem;">
+                        <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">整体市场情绪</h2>
+                        <div style="font-size: 2.25rem; font-weight: bold; border-radius: 8px; padding: 1rem; margin-top: 1rem; text-align: center; background-color: {sentiment_bg}; color: {sentiment_text};">
+                            {data['overallSentiment']}
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr; gap: 2rem; margin-bottom: 2rem;">
+                        <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                            <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">整体摘要</h2>
+                            <p style="margin-top: 1rem; color: #374151; line-height: 1.5;">{data['overallSummary']}</p>
+                        </div>
+                        <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                            <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">每周点评</h2>
+                            <p style="margin-top: 1rem; color: #374151; line-height: 1.5;">{data['dailyCommentary']}</p>
+                        </div>
+                    </div>
+
+                    <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                        <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">中长线投资推荐</h2>
+                        <div style="display: grid; grid-template-columns: 1fr; gap: 1.5rem; margin-top: 1.5rem;">
+                            <div>
+                                <h3 style="font-size: 1.25rem; font-weight: bold; color: #111827; margin-bottom: 1rem;">美股 (US)</h3>
+                                {us_stocks_html}
+                            </div>
+                            <div>
+                                <h3 style="font-size: 1.25rem; font-weight: bold; color: #111827; margin-bottom: 1rem;">港股 (HK)</h3>
+                                {hk_stocks_html}
+                            </div>
+                            <div>
+                                <h3 style="font-size: 1.25rem; font-weight: bold; color: #111827; margin-bottom: 1rem;">沪深股市 (CN)</h3>
+                                {cn_stocks_html}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+            return html_content
+
+        # 生成HTML邮件正文
+        email_html_body = generate_html_email_body(analysis_data)
         
-        # 发送邮件通知
+        # 发送邮件通知，现在使用HTML格式
         email_subject = f"【理财分析】每周报告 - {datetime.now().strftime('%Y-%m-%d')}"
-        email_body = (
-            f"整体情绪：{analysis_data['overallSentiment']}\n\n"
-            f"整体摘要：{analysis_data['overallSummary']}\n\n"
-            f"每日点评：{analysis_data['dailyCommentary']}\n\n"
-            f"美股中长线推荐：{json.dumps(analysis_data['usTop10Stocks'], indent=2)}\n\n"
-            f"港股中长线推荐：{json.dumps(analysis_data['hkTop10Stocks'], indent=2)}\n\n"
-            f"沪深股市中长线推荐：{json.dumps(analysis_data['cnTop10Stocks'], indent=2)}\n\n"
-            f"原文链接：{link}"
-        )
-        send_email_notification(GMAIL_RECIPIENT_EMAIL, email_subject, email_body)
+        send_email_notification(GMAIL_RECIPIENT_EMAILS, email_subject, email_html_body, is_html=True)
 
     except Exception as e:
         print(f"Gemini调用或分析失败: {e}")
-        send_email_notification(GMAIL_RECIPIENT_EMAIL, "理财分析任务失败", f"Gemini调用或分析失败：{e}")
+        send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务失败", f"Gemini调用或分析失败：{e}")
 
 
 # --- Notion数据库写入函数 ---
