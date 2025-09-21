@@ -67,12 +67,43 @@ def analyze_content(content):
     使用Gemini API对文章内容进行总结、情绪和行情分析
     """
     prompt_text = f"""
-    对以下财经新闻进行分析：
+    你是一名资深金融分析师，拥有对美股、港股和中国沪深股市的深度分析能力。请根据以下财经新闻和市场数据，完成以下分析任务：
 
+    1. **整体市场情绪和摘要：** 给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。
+    2. **每日点评与预判：** 针对前一日的美股、港股和大陆股市，给出专业的点评和对后续走势的预判。
+    3. **中长线投资推荐：** 选出美股、港股和中国沪深股市各10个值得中长线买入的股票代码（不限于具体公司、指数或ETF），并为每个推荐给出简短的入选理由。
+
+    请将所有分析结果以严格的JSON格式返回，确保可直接解析。JSON对象的结构如下：
+
+    {{
+      "overallSentiment": "利好",
+      "overallSummary": "...",
+      "dailyCommentary": "...",
+      "usTop10Stocks": [
+        {{
+          "stockCode": "AAPL",
+          "reason": "..."
+        }},
+        ...
+      ],
+      "hkTop10Stocks": [
+        {{
+          "stockCode": "700.HK",
+          "reason": "..."
+        }},
+        ...
+      ],
+      "cnTop10Stocks": [
+        {{
+          "stockCode": "600519.SH",
+          "reason": "..."
+        }},
+        ...
+      ]
+    }}
+
+    文章内容：
     {content}
-
-    请输出JSON格式的结果，包含 'summary', 'sentiment' (从 '利好', '利空', '中性' 中选择), 和 'market_analysis'。
-    例如: {{'summary': '...', 'sentiment': '...', 'market_analysis': '...'}}
     """
     
     payload = {
@@ -97,10 +128,11 @@ def analyze_content(content):
         # 解析返回的JSON字符串
         analysis_data = json.loads(result_json['candidates'][0]['content']['parts'][0]['text'])
         
-        return analysis_data['summary'], analysis_data['sentiment'], analysis_data['market_analysis']
+        return analysis_data['overallSentiment'], analysis_data['overallSummary'], analysis_data['dailyCommentary'], \
+               analysis_data['usTop10Stocks'], analysis_data['hkTop10Stocks'], analysis_data['cnTop10Stocks']
     except Exception as e:
         print(f"调用Gemini API失败: {e}")
-        return "AI总结失败", "中性", "AI分析失败"
+        return "中性", "AI分析失败", "AI分析失败", [], [], []
 
 # --- 数据爬取与分析主函数 ---
 def fetch_and_analyze_news():
@@ -118,14 +150,22 @@ def fetch_and_analyze_news():
             content = article["content"]
             
             # AI分析
-            summary, sentiment, market_analysis = analyze_content(content)
+            overallSentiment, overallSummary, dailyCommentary, usTop10Stocks, hkTop10Stocks, cnTop10Stocks = analyze_content(content)
             
             # 写入Notion数据库
-            write_to_notion(title, link, summary, sentiment, market_analysis)
+            write_to_notion(title, link, overallSentiment, overallSummary, dailyCommentary, usTop10Stocks, hkTop10Stocks, cnTop10Stocks)
             
             # 发送邮件通知
             email_subject = f"【理财分析】新文章：{title}"
-            email_body = f"AI总结：{summary}\n\n情绪分析：{sentiment}\n行情判断：{market_analysis}\n\n原文链接：{link}"
+            email_body = (
+                f"整体情绪：{overallSentiment}\n\n"
+                f"整体摘要：{overallSummary}\n\n"
+                f"每日点评：{dailyCommentary}\n\n"
+                f"美股中长线推荐：{json.dumps(usTop10Stocks, indent=2)}\n\n"
+                f"港股中长线推荐：{json.dumps(hkTop10Stocks, indent=2)}\n\n"
+                f"沪深股市中长线推荐：{json.dumps(cnTop10Stocks, indent=2)}\n\n"
+                f"原文链接：{link}"
+            )
             send_email_notification(GMAIL_RECIPIENT_EMAIL, email_subject, email_body)
             
     except Exception as e:
@@ -133,7 +173,7 @@ def fetch_and_analyze_news():
         send_email_notification(GMAIL_RECIPIENT_EMAIL, "理财分析任务失败", f"爬取任务失败：{e}")
 
 # --- Notion数据库写入函数 ---
-def write_to_notion(title, url, summary, sentiment, analysis):
+def write_to_notion(title, url, overallSentiment, overallSummary, dailyCommentary, usTop10Stocks, hkTop10Stocks, cnTop10Stocks):
     """将数据写入Notion数据库"""
     try:
         notion.pages.create(
@@ -141,9 +181,12 @@ def write_to_notion(title, url, summary, sentiment, analysis):
             properties={
                 "Title": {"title": [{"text": {"content": title}}]},
                 "URL": {"url": url},
-                "Summary": {"rich_text": [{"text": {"content": summary}}]},
-                "Sentiment": {"select": {"name": sentiment}},
-                "MarketAnalysis": {"rich_text": [{"text": {"content": analysis}}]},
+                "OverallSentiment": {"select": {"name": overallSentiment}},
+                "OverallSummary": {"rich_text": [{"text": {"content": overallSummary}}]},
+                "DailyCommentary": {"rich_text": [{"text": {"content": dailyCommentary}}]},
+                "usTop10Stocks": {"rich_text": [{"text": {"content": json.dumps(usTop10Stocks)}}]},
+                "hkTop10Stocks": {"rich_text": [{"text": {"content": json.dumps(hkTop10Stocks)}}]},
+                "cnTop10Stocks": {"rich_text": [{"text": {"content": json.dumps(cnTop10Stocks)}}]},
                 "CrawledDate": {"date": {"start": datetime.now().isoformat()}}
             }
         )
@@ -153,4 +196,3 @@ def write_to_notion(title, url, summary, sentiment, analysis):
 
 if __name__ == "__main__":
     fetch_and_analyze_news()
-
