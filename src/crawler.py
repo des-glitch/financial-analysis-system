@@ -21,8 +21,8 @@ GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID")
 GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET")
 GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN")
 # 这是一个逗号分隔的邮箱地址列表
-# 修复了当环境变量不存在时的错误
-GMAIL_RECIPIENT_EMAILS = os.environ.get("GMAIL_RECIPIENT_EMAILS", "").split(',')
+# 修复了当环境变量不存在时的错误，并提供了默认值
+GMAIL_RECIPIENT_EMAILS = os.environ.get("GMAIL_RECIPIENT_EMAILS", "tgllres@gmail.com").split(',')
 
 # 从环境变量中获取Firebase配置
 FIREBASE_CONFIG_JSON = os.environ.get("FIREBASE_CONFIG_JSON")
