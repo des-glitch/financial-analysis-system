@@ -9,6 +9,7 @@ from googleapiclient.discovery import build
 from datetime import datetime
 import json
 import time
+import re
 
 # --- 配置部分 ---
 # 从GitHub Actions Secrets获取环境变量
@@ -70,9 +71,6 @@ def fetch_and_analyze_news():
     
     payload = {
         "contents": [{"parts": [{"text": prompt_text}]}],
-        "generationConfig": {
-            "responseMimeType": "application/json"
-        },
         "tools": [{"google_search": {}}] # 启用Google搜索工具
     }
     
@@ -90,9 +88,17 @@ def fetch_and_analyze_news():
         response.raise_for_status()  # 检查HTTP错误
         
         result_json = response.json()
+        raw_text = result_json['candidates'][0]['content']['parts'][0]['text']
         print("成功从 Gemini API 获取响应。")
         
-        analysis_data = json.loads(result_json['candidates'][0]['content']['parts'][0]['text'])
+        # 尝试从原始文本中提取JSON代码块
+        json_match = re.search(r'```json\n(.*)\n```', raw_text, re.DOTALL)
+        if json_match:
+            json_text = json_match.group(1)
+        else:
+            json_text = raw_text # 如果没有代码块，则尝试直接解析整个文本
+        
+        analysis_data = json.loads(json_text)
         print("成功解析 JSON 数据。")
         
         # 写入Notion数据库
