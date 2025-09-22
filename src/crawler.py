@@ -324,7 +324,8 @@ def _get_cn_hk_stock_data(stock_code):
             yahoo_code = numeric_part.zfill(4) + '.HK'
     
     try:
-        # Get latest daily quote
+        # NOTE: 使用 'daily_basic' API，该接口提供非复权日线行情，以适应Tushare的120积分限制。
+        print(f"尝试使用 'daily_basic' API 获取 {stock_code} 的数据...")
         df = pro.daily_basic(ts_code=tushare_code, fields='trade_date,close,pe_ttm,pb,total_mv,change_pct')
         if not df.empty:
             latest_data = df.iloc[0]
@@ -411,127 +412,96 @@ def _save_to_firestore(data):
 
 def _save_to_notion(data):
     """
-    Save the enriched data to Notion database.
+    Save the enriched data to Notion database with the specified field structure.
     """
     if not NOTION_TOKEN or not NOTION_DATABASE_ID:
         print("Notion credentials not set, skipping save to Notion.")
         return False
-    
+
     try:
-        new_page = notion.pages.create(
-            parent={"database_id": NOTION_DATABASE_ID},
-            properties={
-                "Name": {
-                    "title": [
-                        {
-                            "text": {
-                                "content": f"金融周报 - {datetime.now().strftime('%Y-%m-%d')}"
-                            }
-                        }
-                    ]
-                },
-                "Date": {
-                    "date": {
-                        "start": datetime.now().isoformat()
-                    }
-                }
-            },
-            children=[
-                {
-                    "object": "block",
-                    "type": "heading_2",
-                    "heading_2": {
-                        "rich_text": [
-                            {"text": {"content": "核心分析"}}
-                        ]
-                    }
-                },
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [
-                            {"text": {"content": f"整体市场情绪：{data.get('overallSentiment', 'N/A')}"}}
-                        ]
-                    }
-                },
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [
-                            {"text": {"content": data.get('overallSummary', 'N/A')}}
-                        ]
-                    }
-                },
-                {
-                    "object": "block",
-                    "type": "heading_2",
-                    "heading_2": {
-                        "rich_text": [
-                            {"text": {"content": "中长线投资推荐"}}
-                        ]
-                    }
-                }
-            ]
-        )
-        
-        for stocks_key in ['usTop10Stocks', 'hkTop10Stocks', 'cnTop10Stocks']:
-            market_name = {
-                'usTop10Stocks': '美股',
-                'hkTop10Stocks': '港股',
-                'cnTop10Stocks': 'A股'
-            }.get(stocks_key, '股票')
-            
-            notion.blocks.children.append(
-                block_id=new_page["id"],
-                children=[
+        # Convert list data to JSON strings to fit into Notion rich_text properties
+        us_stocks_json = json.dumps(data.get('usTop10Stocks', []), ensure_ascii=False)
+        hk_stocks_json = json.dumps(data.get('hkTop10Stocks', []), ensure_ascii=False)
+        cn_stocks_json = json.dumps(data.get('cnTop10Stocks', []), ensure_ascii=False)
+
+        new_page_properties = {
+            "Title": {
+                "title": [
                     {
-                        "object": "block",
-                        "type": "heading_3",
-                        "heading_3": {
-                            "rich_text": [
-                                {"text": {"content": f"{market_name} Top 10"}}
-                            ]
+                        "text": {
+                            "content": f"金融周报 - {datetime.now().strftime('%Y-%m-%d')}"
                         }
                     }
                 ]
-            )
-            
-            for stock in data.get(stocks_key, []):
-                stock_info_text = f"**{stock.get('stockCode', 'N/A')}** - {stock.get('companyName', 'N/A')}\n"
-                stock_info_text += f"**原因**: {stock.get('reason', 'N/A')}\n"
-                
-                if market_name == '美股':
-                    stock_info_text += f"**最新价格**: {stock.get('price', 'N/A')}\n"
-                    stock_info_text += f"**市值**: {stock.get('marketCap', 'N/A')}\n"
-                    stock_info_text += f"**周涨幅**: {stock.get('weeklyChange', 'N/A')}%\n"
-                    stock_info_text += f"**市盈率 (PE)**: {stock.get('peRatio', 'N/A')}\n"
-                    stock_info_text += f"**市销率 (PS)**: {stock.get('psRatio', 'N/A')}\n"
-                    stock_info_text += f"**净资产收益率 (ROE)**: {stock.get('roeRatio', 'N/A')}%"
-                else:
-                    stock_info_text += f"**最新价格**: {stock.get('price', 'N/A')}\n"
-                    stock_info_text += f"**市值**: {stock.get('marketCap', 'N/A')}\n"
-                    stock_info_text += f"**周涨幅**: {stock.get('weeklyChange', 'N/A')}%\n"
-                    stock_info_text += f"**市盈率 (PE)**: {stock.get('peRatio', 'N/A')}\n"
-                    stock_info_text += f"**市净率 (PB)**: {stock.get('pbRatio', 'N/A')}"
-                
-                # Add link separately if it exists
-                if stock.get('sourceLink'):
-                    stock_info_text += f"\n**链接**: {stock.get('sourceLink')}"
-                    
-                notion.blocks.children.append(
-                    block_id=new_page["id"],
-                    children=[
-                        {
-                            "object": "block",
-                            "type": "paragraph",
-                            "paragraph": {
-                                "rich_text": [{"text": {"content": stock_info_text}}]
-                            }
+            },
+            "URL": {
+                "url": "https://example.com/finance-report"  # Placeholder URL
+            },
+            "OverallSentiment": {
+                "rich_text": [
+                    {
+                        "text": {
+                            "content": data.get('overallSentiment', 'N/A')
                         }
-                    ]
-                )
+                    }
+                ]
+            },
+            "OverallSummary": {
+                "rich_text": [
+                    {
+                        "text": {
+                            "content": data.get('overallSummary', 'N/A')
+                        }
+                    }
+                ]
+            },
+            "DailyCommentary": {
+                "rich_text": [
+                    {
+                        "text": {
+                            "content": data.get('dailyCommentary', 'N/A')
+                        }
+                    }
+                ]
+            },
+            "usTop10Stocks": {
+                "rich_text": [
+                    {
+                        "text": {
+                            "content": us_stocks_json
+                        }
+                    }
+                ]
+            },
+            "hkTop10Stocks": {
+                "rich_text": [
+                    {
+                        "text": {
+                            "content": hk_stocks_json
+                        }
+                    }
+                ]
+            },
+            "cnTop10Stocks": {
+                "rich_text": [
+                    {
+                        "text": {
+                            "content": cn_stocks_json
+                        }
+                    }
+                ]
+            },
+            "CrawledDate": {
+                "date": {
+                    "start": datetime.now().isoformat()
+                }
+            }
+        }
+        
+        notion.pages.create(
+            parent={"database_id": NOTION_DATABASE_ID},
+            properties=new_page_properties
+        )
 
         print("Successfully saved data to Notion.")
         return True
