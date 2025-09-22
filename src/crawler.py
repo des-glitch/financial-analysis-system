@@ -453,10 +453,6 @@ def _save_to_notion(data):
                             "rich_text": [
                                 {"text": {"content": f"{market_name} Top 10"}}
                             ]
-                        "heading_3": {
-                            "rich_text": [
-                                {"text": {"content": f"{market_name} Top 10"}}
-                            ]
                         }
                     }
                 ]
@@ -472,15 +468,17 @@ def _save_to_notion(data):
                     stock_info_text += f"**周涨幅**: {stock.get('weeklyChange', 'N/A')}%\n"
                     stock_info_text += f"**市盈率 (PE)**: {stock.get('peRatio', 'N/A')}\n"
                     stock_info_text += f"**市销率 (PS)**: {stock.get('psRatio', 'N/A')}\n"
-                    stock_info_text += f"**净资产收益率 (ROE)**: {stock.get('roeRatio', 'N/A')}%\n"
-                    stock_info_text += f"**链接**: {stock.get('sourceLink', 'N/A')}"
+                    stock_info_text += f"**净资产收益率 (ROE)**: {stock.get('roeRatio', 'N/A')}%"
                 else:
                     stock_info_text += f"**最新价格**: {stock.get('price', 'N/A')}\n"
                     stock_info_text += f"**市值**: {stock.get('marketCap', 'N/A')}\n"
                     stock_info_text += f"**周涨幅**: {stock.get('weeklyChange', 'N/A')}%\n"
                     stock_info_text += f"**市盈率 (PE)**: {stock.get('peRatio', 'N/A')}\n"
-                    stock_info_text += f"**市净率 (PB)**: {stock.get('pbRatio', 'N/A')}\n"
-                    stock_info_text += f"**链接**: {stock.get('sourceLink', 'N/A')}"
+                    stock_info_text += f"**市净率 (PB)**: {stock.get('pbRatio', 'N/A')}"
+                
+                # Add link separately if it exists
+                if stock.get('sourceLink'):
+                    stock_info_text += f"\n**链接**: {stock.get('sourceLink')}"
                     
                 notion.blocks.children.append(
                     block_id=new_page["id"],
