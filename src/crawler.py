@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-这个脚本是一个金融周报生成工具，主要功能如下：
+这个脚本是一个理财分析生成工具，主要功能如下：
 
 1.  **AI 分析**：调用 Gemini API，获取对全球主要市场（美股、港股、A股）的宏观分析和个股推荐。
 2.  **数据抓取**：使用 Alpha Vantage 和 Tushare 接口获取推荐股票的实时价格、市值、市盈率等关键数据。
@@ -25,7 +25,6 @@ pip install tushare requests notion-client google-api-python-client google-auth-
 -   ALPHA_VANTAGE_API_KEY
 -   TUSHARE_API_KEY
 -   __app_id
--   __firebase_config
 
 **注意**：脚本在生成香港股票链接时，已修复腾讯等公司代码的补零问题，确保链接正确。
 """
@@ -63,7 +62,6 @@ else:
 # Get Firebase config from environment variables
 FIREBASE_CONFIG_JSON = os.environ.get("FIREBASE_CONFIG_JSON")
 APP_ID = os.environ.get("__app_id")
-FIREBASE_CONFIG = os.environ.get("__firebase_config")
 
 # --- Gemini API Configuration ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -75,21 +73,18 @@ TUSHARE_API_KEY = os.environ.get("TUSHARE_API_KEY")
 # --- Initialize clients ---
 notion = Client(auth=NOTION_TOKEN)
 
-if not FIREBASE_CONFIG:
-    if FIREBASE_CONFIG_JSON:
-        try:
-            cred = credentials.Certificate(json.loads(FIREBASE_CONFIG_JSON))
-            initialize_app(cred)
-            db = firestore.client()
-            print("Firebase Admin SDK initialized successfully.")
-        except Exception as e:
-            print(f"Failed to initialize Firebase Admin SDK: {e}")
-            db = None
-    else:
-        print("FIREBASE_CONFIG_JSON environment variable not found. Firebase Admin SDK not initialized.")
-        db = None
+# Initialize Firebase Admin SDK
+db = None
+if FIREBASE_CONFIG_JSON:
+    try:
+        cred = credentials.Certificate(json.loads(FIREBASE_CONFIG_JSON))
+        initialize_app(cred)
+        db = firestore.client()
+        print("Firebase Admin SDK initialized successfully.")
+    except Exception as e:
+        print(f"Failed to initialize Firebase Admin SDK. Check FIREBASE_CONFIG_JSON: {e}")
 else:
-    db = None
+    print("FIREBASE_CONFIG_JSON environment variable not found. Firebase Admin SDK not initialized.")
 
 # --- Gmail API authentication ---
 def get_gmail_service():
@@ -394,6 +389,33 @@ def _enrich_stock_data(stocks_list, market_type):
     
     return enriched_stocks
 
+def _format_stocks_for_notion(stocks):
+    """Formats a list of stocks into a compact string for Notion's rich_text property."""
+    if not stocks:
+        return ""
+    
+    formatted_list = []
+    for i, stock in enumerate(stocks):
+        # Create a compact string for each stock
+        stock_str = f"[{i+1}. {stock.get('companyName', 'N/A')} ({stock.get('stockCode', 'N/A')}): {stock.get('reason', 'N/A')}]"
+        
+        # Add basic data if available
+        price = stock.get('price')
+        if price != 'N/A':
+            stock_str += f" | 价格: {price}"
+        
+        weekly_change = stock.get('weeklyChange')
+        if weekly_change != 'N/A':
+            stock_str += f" | 周涨幅: {weekly_change}%"
+            
+        formatted_list.append(stock_str)
+        
+    # Join the list into a single string, respecting the 2000 character limit
+    full_string = "\n\n".join(formatted_list)
+    if len(full_string) > 2000:
+        return full_string[:1995] + "..."
+    
+    return full_string
 
 # --- Storage and Notification Functions ---
 def _save_to_firestore(data):
@@ -419,17 +441,17 @@ def _save_to_notion(data):
         return False
 
     try:
-        # Convert list data to JSON strings to fit into Notion rich_text properties
-        us_stocks_json = json.dumps(data.get('usTop10Stocks', []), ensure_ascii=False)
-        hk_stocks_json = json.dumps(data.get('hkTop10Stocks', []), ensure_ascii=False)
-        cn_stocks_json = json.dumps(data.get('cnTop10Stocks', []), ensure_ascii=False)
+        # Format the stock data to fit Notion's rich_text limit
+        us_stocks_formatted = _format_stocks_for_notion(data.get('usTop10Stocks', []))
+        hk_stocks_formatted = _format_stocks_for_notion(data.get('hkTop10Stocks', []))
+        cn_stocks_formatted = _format_stocks_for_notion(data.get('cnTop10Stocks', []))
 
         new_page_properties = {
             "Title": {
                 "title": [
                     {
                         "text": {
-                            "content": f"金融周报 - {datetime.now().strftime('%Y-%m-%d')}"
+                            "content": f"【理财分析】每周理财分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
                         }
                     }
                 ]
@@ -468,7 +490,7 @@ def _save_to_notion(data):
                 "rich_text": [
                     {
                         "text": {
-                            "content": us_stocks_json
+                            "content": us_stocks_formatted
                         }
                     }
                 ]
@@ -477,7 +499,7 @@ def _save_to_notion(data):
                 "rich_text": [
                     {
                         "text": {
-                            "content": hk_stocks_json
+                            "content": hk_stocks_formatted
                         }
                     }
                 ]
@@ -486,7 +508,7 @@ def _save_to_notion(data):
                 "rich_text": [
                     {
                         "text": {
-                            "content": cn_stocks_json
+                            "content": cn_stocks_formatted
                         }
                     }
                 ]
@@ -522,7 +544,7 @@ def _format_html_report(data):
     <!DOCTYPE html>
     <html>
     <head>
-        <title>金融周报 - {report_date}</title>
+        <title>【理财分析】每周理财分析报告 - {report_date}</title>
         <meta charset="utf-8">
         <style>
             body {{
@@ -614,7 +636,7 @@ def _format_html_report(data):
     <body>
         <div class="container">
             <div class="header">
-                <h1>金融周报</h1>
+                <h1>【理财分析】每周理财分析报告</h1>
                 <p>生成日期: {report_date}</p>
                 <p>由 Gemini AI 提供分析，数据由 Alpha Vantage 和 Tushare 提供</p>
             </div>
@@ -742,7 +764,7 @@ def main():
 
     # 4. Send email notification
     html_report = _format_html_report(analysis_data)
-    subject = f"您的金融周报 - {datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"【理财分析】每周理财分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
     send_email_notification(GMAIL_RECIPIENT_EMAILS, subject, html_report, is_html=True)
     
     print("金融周报生成任务完成。")
