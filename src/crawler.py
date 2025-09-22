@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-这个脚本是一个理财分析生成工具，主要功能如下：
+这个脚本是一个金融周报生成工具，主要功能如下：
 
 1.  **AI 分析**：调用 Gemini API，获取对全球主要市场（美股、港股、A股）的宏观分析和个股推荐。
 2.  **数据抓取**：使用 Alpha Vantage 和 Tushare 接口获取推荐股票的实时价格、市值、市盈率等关键数据。
@@ -446,6 +446,16 @@ def _save_to_notion(data):
         hk_stocks_formatted = _format_stocks_for_notion(data.get('hkTop10Stocks', []))
         cn_stocks_formatted = _format_stocks_for_notion(data.get('cnTop10Stocks', []))
 
+        # Handle the select property for overall sentiment
+        overall_sentiment = data.get('overallSentiment', 'N/A')
+        sentiment_property = {}
+        if overall_sentiment != 'N/A':
+            sentiment_property = {
+                "select": {
+                    "name": overall_sentiment
+                }
+            }
+        
         new_page_properties = {
             "Title": {
                 "title": [
@@ -459,15 +469,7 @@ def _save_to_notion(data):
             "URL": {
                 "url": "https://example.com/finance-report"  # Placeholder URL
             },
-            "OverallSentiment": {
-                "rich_text": [
-                    {
-                        "text": {
-                            "content": data.get('overallSentiment', 'N/A')
-                        }
-                    }
-                ]
-            },
+            "OverallSentiment": sentiment_property,
             "OverallSummary": {
                 "rich_text": [
                     {
@@ -592,34 +594,29 @@ def _format_html_report(data):
                 line-height: 1.8;
                 font-size: 16px;
             }}
-            .stock-list {{
-                list-style-type: none;
-                padding: 0;
+            .stock-table-container {{
+                overflow-x: auto;
             }}
-            .stock-item {{
-                background-color: #f9f9f9;
+            .stock-table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-bottom: 20px;
+            }}
+            .stock-table th, .stock-table td {{
+                padding: 12px;
                 border: 1px solid #e0e0e0;
-                border-radius: 8px;
-                padding: 15px;
-                margin-bottom: 15px;
-                transition: transform 0.2s;
+                text-align: left;
+                white-space: nowrap;
             }}
-            .stock-item:hover {{
-                transform: translateY(-3px);
+            .stock-table th {{
+                background-color: #f0f0f0;
+                font-weight: bold;
             }}
-            .stock-item h4 {{
-                margin: 0 0 5px 0;
-                color: #2980b9;
-                font-size: 18px;
+            .stock-table tr:nth-child(even) {{
+                background-color: #fafafa;
             }}
-            .stock-item p {{
-                margin: 0;
-                font-size: 14px;
-                line-height: 1.6;
-            }}
-            .stock-reason {{
-                margin-top: 10px;
-                color: #555;
+            .stock-table tr:hover {{
+                background-color: #f1f1f1;
             }}
             .link-section {{
                 margin-top: 20px;
@@ -658,57 +655,73 @@ def _format_html_report(data):
             
             <div class="section">
                 <h2 class="section-title">中长线投资推荐</h2>
-                <div class="content">
+                <div class="stock-table-container">
                     <h3>美股 Top 10</h3>
-                    <ul class="stock-list">
+                    <table class="stock-table">
+                        <thead>
+                            <tr>
+                                <th>公司</th>
+                                <th>代码</th>
+                                <th>入选理由</th>
+                                <th>最新价格</th>
+                                <th>市值</th>
+                                <th>周涨幅</th>
+                                <th>市盈率 (PE)</th>
+                                <th>市销率 (PS)</th>
+                                <th>净资产收益率 (ROE)</th>
+                                <th>详情</th>
+                            </tr>
+                        </thead>
+                        <tbody>
     """
     
-    # Helper to add stock items
-    def add_stocks_to_html(stock_list, market_name):
+    def add_us_stocks_to_html_table(stock_list):
         nonlocal html_content
-        
         if stock_list:
             for stock in stock_list:
-                stock_info_text = f"""
-                <li class="stock-item">
-                    <h4>{stock.get('companyName', 'N/A')} ({stock.get('stockCode', 'N/A')})</h4>
-                    <p class="stock-reason"><strong>入选理由:</strong> {stock.get('reason', 'N/A')}</p>
-                    <p>
-                        <strong>最新价格:</strong> {stock.get('price', 'N/A')} | 
-                        <strong>市值:</strong> {stock.get('marketCap', 'N/A')}<br>
-                        <strong>周涨幅:</strong> {stock.get('weeklyChange', 'N/A')}%
-                    </p>
+                html_content += f"""
+                            <tr>
+                                <td>{stock.get('companyName', 'N/A')}</td>
+                                <td>{stock.get('stockCode', 'N/A')}</td>
+                                <td>{stock.get('reason', 'N/A')}</td>
+                                <td>{stock.get('price', 'N/A')}</td>
+                                <td>{stock.get('marketCap', 'N/A')}</td>
+                                <td>{stock.get('weeklyChange', 'N/A')}%</td>
+                                <td>{stock.get('peRatio', 'N/A')}</td>
+                                <td>{stock.get('psRatio', 'N/A')}</td>
+                                <td>{stock.get('roeRatio', 'N/A')}%</td>
+                                <td><a href="{stock.get('sourceLink', '#')}">查看</a></td>
+                            </tr>
                 """
-                if market_name == "美股":
-                    stock_info_text += f"""
-                    <p>
-                        <strong>市盈率 (PE):</strong> {stock.get('peRatio', 'N/A')} | 
-                        <strong>市销率 (PS):</strong> {stock.get('psRatio', 'N/A')}<br>
-                        <strong>净资产收益率 (ROE)**:</strong> {stock.get('roeRatio', 'N/A')}%
-                    </p>
-                    """
-                elif market_name in ["港股", "A股"]:
-                    stock_info_text += f"""
-                    <p>
-                        <strong>市盈率 (PE):</strong> {stock.get('peRatio', 'N/A')} | 
-                        <strong>市净率 (PB)**:</strong> {stock.get('pbRatio', 'N/A')}
-                    </p>
-                    """
-                
-                stock_info_text += f"""
-                    <p class="link-section"><a href="{stock.get('sourceLink', '#')}">查看更多数据</a></p>
-                </li>
-                """
-                html_content += stock_info_text
         else:
-            html_content += f"<li><p>暂无{market_name}推荐。</p></li>"
+            html_content += """<tr><td colspan="10">暂无美股推荐。</td></tr>"""
 
-    add_stocks_to_html(data.get('usTop10Stocks'), '美股')
-    html_content += "</ul><h3>港股 Top 10</h3><ul class='stock-list'>"
-    add_stocks_to_html(data.get('hkTop10Stocks'), '港股')
-    html_content += "</ul><h3>A股 Top 10</h3><ul class='stock-list'>"
-    add_stocks_to_html(data.get('cnTop10Stocks'), 'A股')
-    html_content += "</ul></div></div>"
+    def add_other_stocks_to_html_table(stock_list, market_name):
+        nonlocal html_content
+        if stock_list:
+            for stock in stock_list:
+                html_content += f"""
+                            <tr>
+                                <td>{stock.get('companyName', 'N/A')}</td>
+                                <td>{stock.get('stockCode', 'N/A')}</td>
+                                <td>{stock.get('reason', 'N/A')}</td>
+                                <td>{stock.get('price', 'N/A')}</td>
+                                <td>{stock.get('marketCap', 'N/A')}</td>
+                                <td>{stock.get('weeklyChange', 'N/A')}%</td>
+                                <td>{stock.get('peRatio', 'N/A')}</td>
+                                <td>{stock.get('pbRatio', 'N/A')}</td>
+                                <td><a href="{stock.get('sourceLink', '#')}">查看</a></td>
+                            </tr>
+                """
+        else:
+            html_content += f"""<tr><td colspan="9">暂无{market_name}推荐。</td></tr>"""
+
+    add_us_stocks_to_html_table(data.get('usTop10Stocks'))
+    html_content += "</tbody></table><h3>港股 Top 10</h3><table class='stock-table'><thead><tr><th>公司</th><th>代码</th><th>入选理由</th><th>最新价格</th><th>市值</th><th>周涨幅</th><th>市盈率 (PE)</th><th>市净率 (PB)</th><th>详情</th></tr></thead><tbody>"
+    add_other_stocks_to_html_table(data.get('hkTop10Stocks'), '港股')
+    html_content += "</tbody></table><h3>A股 Top 10</h3><table class='stock-table'><thead><tr><th>公司</th><th>代码</th><th>入选理由</th><th>最新价格</th><th>市值</th><th>周涨幅</th><th>市盈率 (PE)</th><th>市净率 (PB)</th><th>详情</th></tr></thead><tbody>"
+    add_other_stocks_to_html_table(data.get('cnTop10Stocks'), 'A股')
+    html_content += "</tbody></table></div></div>"
 
     html_content += """
             <div class="section">
