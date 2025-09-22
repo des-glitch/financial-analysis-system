@@ -283,6 +283,13 @@ def _get_cn_hk_stock_data(stock_code):
     # Tushare uses a different code format, e.g., '600519.SH' -> '600519.SH'
     tushare_code = stock_code.upper()
     
+    # Check for HK stock and if it needs a leading zero for Yahoo Finance
+    yahoo_code = stock_code
+    if '.HK' in stock_code.upper():
+        numeric_part = stock_code.upper().replace('.HK', '')
+        if len(numeric_part) < 4:
+            yahoo_code = numeric_part.zfill(4) + '.HK'
+    
     try:
         # Get latest daily quote
         df = pro.daily_basic(ts_code=tushare_code, fields='trade_date,close,pe_ttm,pb,total_mv,change_pct')
@@ -300,7 +307,7 @@ def _get_cn_hk_stock_data(stock_code):
                 "marketCap": f"{market_cap_billion:.2f} B",
                 "peRatio": pe_ratio,
                 "pbRatio": pb_ratio,
-                "sourceLink": f"https://finance.yahoo.com/quote/{stock_code}"
+                "sourceLink": f"https://finance.yahoo.com/quote/{yahoo_code}"
             }
         else:
             print(f"无法从 Tushare 获取 {stock_code} 数据。")
@@ -505,6 +512,9 @@ def _format_html_report(data):
     """
     report_date = datetime.now().strftime('%Y年%m月%d日')
     
+    # Sanitize commentary before inserting into HTML
+    commentary_html = data.get('dailyCommentary', 'N/A').replace('\n', '<br><br>')
+    
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -617,7 +627,7 @@ def _format_html_report(data):
             <div class="section">
                 <h2 class="section-title">每周点评与预判</h2>
                 <div class="content">
-                    {data.get('dailyCommentary', 'N/A').replace('\\n', '<br><br>')}
+                    {commentary_html}
                 </div>
             </div>
             
