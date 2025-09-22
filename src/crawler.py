@@ -1,3 +1,35 @@
+# -*- coding: utf-8 -*-
+
+"""
+这个脚本是一个金融周报生成工具，主要功能如下：
+
+1.  **AI 分析**：调用 Gemini API，获取对全球主要市场（美股、港股、A股）的宏观分析和个股推荐。
+2.  **数据抓取**：使用 Alpha Vantage 和 Tushare 接口获取推荐股票的实时价格、市值、市盈率等关键数据。
+3.  **多平台同步**：将生成的金融周报同步到 Notion 和 Firestore 数据库。
+4.  **邮件通知**：将格式化好的周报以 HTML 邮件的形式发送给指定的收件人。
+
+**运行环境依赖**：
+请确保在运行此脚本之前，已安装所有必需的 Python 库。您可以通过以下命令安装：
+
+pip install tushare requests notion-client google-api-python-client google-auth-oauthlib firebase-admin
+
+**环境变量配置**：
+本脚本依赖多个环境变量来访问 API 和服务。请确保已在您的运行环境中（如 GitHub Actions Secrets）配置以下变量：
+-   NOTION_TOKEN
+-   NOTION_DATABASE_ID
+-   GMAIL_CLIENT_ID
+-   GMAIL_CLIENT_SECRET
+-   GMAIL_REFRESH_TOKEN
+-   GMAIL_RECIPIENT_EMAILS
+-   FIREBASE_CONFIG_JSON
+-   ALPHA_VANTAGE_API_KEY
+-   TUSHARE_API_KEY
+-   __app_id
+-   __firebase_config
+
+**注意**：脚本在生成香港股票链接时，已修复腾讯等公司代码的补零问题，确保链接正确。
+"""
+
 import os
 import requests
 from notion_client import Client
@@ -287,6 +319,7 @@ def _get_cn_hk_stock_data(stock_code):
     yahoo_code = stock_code
     if '.HK' in stock_code.upper():
         numeric_part = stock_code.upper().replace('.HK', '')
+        # Yahoo Finance requires a leading zero for 3-digit HK codes like 700.HK -> 0700.HK
         if len(numeric_part) < 4:
             yahoo_code = numeric_part.zfill(4) + '.HK'
     
@@ -659,14 +692,14 @@ def _format_html_report(data):
                     <p>
                         <strong>市盈率 (PE):</strong> {stock.get('peRatio', 'N/A')} | 
                         <strong>市销率 (PS):</strong> {stock.get('psRatio', 'N/A')}<br>
-                        <strong>净资产收益率 (ROE):</strong> {stock.get('roeRatio', 'N/A')}%
+                        <strong>净资产收益率 (ROE)**:</strong> {stock.get('roeRatio', 'N/A')}%
                     </p>
                     """
                 elif market_name in ["港股", "A股"]:
                     stock_info_text += f"""
                     <p>
                         <strong>市盈率 (PE):</strong> {stock.get('peRatio', 'N/A')} | 
-                        <strong>市净率 (PB):</strong> {stock.get('pbRatio', 'N/A')}
+                        <strong>市净率 (PB)**:</strong> {stock.get('pbRatio', 'N/A')}
                     </p>
                     """
                 
