@@ -11,6 +11,7 @@ import json
 import time
 import re
 from firebase_admin import credentials, initialize_app, firestore
+import tushare as ts
 
 # --- Configuration ---
 # Get environment variables from GitHub Actions Secrets
@@ -21,7 +22,6 @@ GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID")
 GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET")
 GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN")
 
-# Fix inconsistent environment variable name, also support a single email address
 gmail_emails_str = os.environ.get("GMAIL_RECIPIENT_EMAILS") or os.environ.get("GMAIL_RECIPIENT_EMAIL")
 if gmail_emails_str:
     GMAIL_RECIPIENT_EMAILS = [email.strip() for email in gmail_emails_str.split(',')]
@@ -30,7 +30,6 @@ else:
 
 # Get Firebase config from environment variables
 FIREBASE_CONFIG_JSON = os.environ.get("FIREBASE_CONFIG_JSON")
-# These two variables are automatically provided in the Canvas environment
 APP_ID = os.environ.get("__app_id")
 FIREBASE_CONFIG = os.environ.get("__firebase_config")
 
@@ -38,16 +37,12 @@ FIREBASE_CONFIG = os.environ.get("__firebase_config")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # --- Stock API Configuration ---
-# This is a new required environment variable
 ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY")
+TUSHARE_API_KEY = os.environ.get("TUSHARE_API_KEY")
 
 # --- Initialize clients ---
-# Initialize Notion client
 notion = Client(auth=NOTION_TOKEN)
 
-# Initialize Firebase Admin SDK
-# If running outside the Canvas environment, use `FIREBASE_CONFIG_JSON`
-# If running in the Canvas environment, this block will be skipped
 if not FIREBASE_CONFIG:
     if FIREBASE_CONFIG_JSON:
         try:
@@ -62,7 +57,6 @@ if not FIREBASE_CONFIG:
         print("FIREBASE_CONFIG_JSON environment variable not found. Firebase Admin SDK not initialized.")
         db = None
 else:
-    # In the Canvas environment, we don't use the Admin SDK, just prepare the data path
     db = None
 
 # --- Gmail API authentication ---
@@ -75,7 +69,6 @@ def get_gmail_service():
         client_secret=GMAIL_CLIENT_SECRET,
         token_uri="https://oauth2.googleapis.com/token"
     )
-    # Use the refresh token to get a new access token
     creds.refresh(Request())
     service = build("gmail", "v1", credentials=creds)
     return service
@@ -97,7 +90,6 @@ def send_email_notification(to_list, subject, message_text, is_html=False):
     try:
         service = get_gmail_service()
         for to in to_list:
-            # 'me' refers to the authenticated user's email address
             message = create_message("me", to.strip(), subject, message_text, "html" if is_html else "plain")
             service.users().messages().send(userId="me", body=message).execute()
             print(f"Successfully sent email to: {to.strip()}")
@@ -214,56 +206,43 @@ def _parse_gemini_response(raw_text):
         send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务失败", error_msg)
         return None
 
-def _get_real_time_stock_data(stock_code):
+def _get_us_stock_data(stock_code):
     """
-    Get real-time stock data (price and weekly change) from Alpha Vantage API.
+    Get US stock data (price, weekly change, and fundamentals) from Alpha Vantage API.
     """
     if not ALPHA_VANTAGE_API_KEY:
-        print("ALPHA_VANTAGE_API_KEY environment variable not set. Skipping API call.")
+        print("ALPHA_VANTAGE_API_KEY environment variable not set. Skipping US stock API call.")
         return None
 
-    url = f'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={stock_code}&apikey={ALPHA_VANTAGE_API_KEY}'
+    # Get real-time data
+    price_url = f'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={stock_code}&apikey={ALPHA_VANTAGE_API_KEY}'
     try:
-        r = requests.get(url)
+        r = requests.get(price_url)
         r.raise_for_status()
         data = r.json().get('Global Quote', {})
         if data:
             price = data.get('05. price', 'N/A')
             weekly_change = data.get('10. change percent', 'N/A').strip('%')
             print(f"获取 {stock_code} 最新报价数据成功: 价格={price}, 涨幅={weekly_change}")
-            return {
-                "price": f"{price} USD",
-                "weeklyChange": float(weekly_change) if weekly_change.replace('.', '', 1).isdigit() else "N/A",
-                "sourceLink": f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={stock_code}",
-            }
-        else:
-            print(f"无法从 Alpha Vantage 获取 {stock_code} 报价数据。")
-            return None
-    except Exception as e:
-        print(f"调用 Alpha Vantage GLOBAL_QUOTE API 失败: {e}")
-        return None
-
-def _get_fundamental_data(stock_code):
-    """
-    Get fundamental stock data (P/E, P/S, Market Cap, etc.) from Alpha Vantage API.
-    """
-    if not ALPHA_VANTAGE_API_KEY:
-        print("ALPHA_VANTAGE_API_KEY environment variable not set. Skipping API call.")
-        return None
-
-    url = f'https://www.alphavantage.co/query?function=OVERVIEW&symbol={stock_code}&apikey={ALPHA_VANTAGE_API_KEY}'
-    try:
-        r = requests.get(url)
-        r.raise_for_status()
-        data = r.json()
-        if data and data.get('Symbol') == stock_code:
-            market_cap = data.get('MarketCapitalization', 'N/A')
-            pe_ratio = data.get('PERatio', 'N/A')
-            ps_ratio = data.get('PriceToSalesRatioTTM', 'N/A')
-            roe_ratio = data.get('ReturnOnEquityTTM', 'N/A')
-            pb_ratio = data.get('PriceToBookRatio', 'N/A')
             
-            # Format market cap for better readability
+            # Wait to avoid API limit
+            time.sleep(15)
+
+            # Get fundamental data
+            overview_url = f'https://www.alphavantage.co/query?function=OVERVIEW&symbol={stock_code}&apikey={ALPHA_VANTAGE_API_KEY}'
+            r_overview = requests.get(overview_url)
+            r_overview.raise_for_status()
+            overview_data = r_overview.json()
+
+            # Wait to avoid API limit
+            time.sleep(15)
+
+            market_cap = overview_data.get('MarketCapitalization', 'N/A')
+            pe_ratio = overview_data.get('PERatio', 'N/A')
+            ps_ratio = overview_data.get('PriceToSalesRatioTTM', 'N/A')
+            roe_ratio = overview_data.get('ReturnOnEquityTTM', 'N/A')
+            pb_ratio = overview_data.get('PriceToBookRatio', 'N/A')
+
             if isinstance(market_cap, str) and market_cap.isdigit():
                 market_cap_value = int(market_cap)
                 if market_cap_value >= 1_000_000_000_000:
@@ -272,26 +251,68 @@ def _get_fundamental_data(stock_code):
                     market_cap = f"{market_cap_value / 1_000_000_000:.2f} B"
                 else:
                     market_cap = f"{market_cap_value}"
-                    
-            print(f"获取 {stock_code} 基本面数据成功: 市值={market_cap}, PE={pe_ratio}, PS={ps_ratio}")
-            
+
             return {
+                "price": f"{price} USD",
+                "weeklyChange": float(weekly_change) if weekly_change.replace('.', '', 1).isdigit() else "N/A",
                 "marketCap": market_cap,
                 "peRatio": pe_ratio,
                 "psRatio": ps_ratio,
                 "roeRatio": roe_ratio,
                 "pbRatio": pb_ratio,
+                "sourceLink": f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={stock_code}",
             }
         else:
-            print(f"无法从 Alpha Vantage 获取 {stock_code} 基本面数据。")
+            print(f"无法从 Alpha Vantage 获取 {stock_code} 报价数据。")
             return None
     except Exception as e:
-        print(f"调用 Alpha Vantage OVERVIEW API 失败: {e}")
+        print(f"调用 Alpha Vantage API 失败: {e}")
         return None
 
-def _enrich_stock_data(stocks_list):
+def _get_cn_hk_stock_data(stock_code):
     """
-    Enriches stock list with real-time and fundamental data from a stock API.
+    Get CN/HK stock data (price and weekly change) from Tushare API.
+    """
+    if not TUSHARE_API_KEY:
+        print("TUSHARE_API_KEY environment variable not set. Skipping CN/HK stock API call.")
+        return None
+    
+    ts.set_token(TUSHARE_API_KEY)
+    pro = ts.pro_api()
+
+    # Tushare uses a different code format, e.g., '600519.SH' -> '600519.SH'
+    tushare_code = stock_code.upper()
+    
+    try:
+        # Get latest daily quote
+        df = pro.daily_basic(ts_code=tushare_code, fields='trade_date,close,pe_ttm,pb,total_mv,change_pct')
+        if not df.empty:
+            latest_data = df.iloc[0]
+            close_price = latest_data['close']
+            pe_ratio = latest_data['pe_ttm']
+            pb_ratio = latest_data['pb']
+            market_cap_billion = latest_data['total_mv'] / 10000.0  # Convert to billion
+            weekly_change = latest_data['change_pct']
+            
+            return {
+                "price": f"{close_price} CNY" if '.SH' in tushare_code or '.SZ' in tushare_code else f"{close_price} HKD",
+                "weeklyChange": weekly_change,
+                "marketCap": f"{market_cap_billion:.2f} B",
+                "peRatio": pe_ratio,
+                "pbRatio": pb_ratio,
+                "sourceLink": f"https://finance.yahoo.com/quote/{stock_code}"
+            }
+        else:
+            print(f"无法从 Tushare 获取 {stock_code} 数据。")
+            return None
+    except Exception as e:
+        print(f"调用 Tushare API 失败: {e}")
+        return None
+
+
+def _enrich_stock_data(stocks_list, market_type):
+    """
+    Enriches stock list with real-time and fundamental data based on market type.
     """
     if not stocks_list:
         return []
@@ -299,50 +320,35 @@ def _enrich_stock_data(stocks_list):
     enriched_stocks = []
     for i, stock in enumerate(stocks_list):
         stock_code = stock.get('stockCode')
-        # Only try to get data for US stocks for now
-        if not any(suffix in stock_code.upper() for suffix in ['.HK', '.SH', '.SZ']):
-            # 获取实时报价数据
-            real_time_data = _get_real_time_stock_data(stock_code)
-            
-            # 延时以遵守 API 频率限制
-            print(f"为了遵守API频率限制，暂停15秒...")
-            time.sleep(15)
 
-            # 获取基本面数据
-            fundamental_data = _get_fundamental_data(stock_code)
-            
-            # 延时以遵守 API 频率限制
-            print(f"为了遵守API频率限制，再次暂停15秒...")
-            time.sleep(15)
-
-            # 合并数据
-            if real_time_data and fundamental_data:
-                stock.update(real_time_data)
-                stock.update(fundamental_data)
+        if market_type == 'us':
+            # Handle US stocks
+            data = _get_us_stock_data(stock_code)
+            if data:
+                stock.update(data)
             else:
-                # If any API call fails, provide a fallback link to Yahoo Finance
                 stock['price'] = "N/A"
                 stock['marketCap'] = "N/A"
                 stock['weeklyChange'] = "N/A"
-                stock['monthlyChange'] = "N/A"
                 stock['peRatio'] = "N/A"
                 stock['psRatio'] = "N/A"
                 stock['roeRatio'] = "N/A"
                 stock['pbRatio'] = "N/A"
                 stock['sourceLink'] = f"https://finance.yahoo.com/quote/{stock_code}"
+        
+        elif market_type in ['hk', 'cn']:
+            # Handle HK and CN stocks
+            data = _get_cn_hk_stock_data(stock_code)
+            if data:
+                stock.update(data)
+            else:
+                stock['price'] = "N/A"
+                stock['marketCap'] = "N/A"
+                stock['weeklyChange'] = "N/A"
+                stock['peRatio'] = "N/A"
+                stock['pbRatio'] = "N/A"
+                stock['sourceLink'] = f"https://finance.yahoo.com/quote/{stock_code}"
                 
-        # For HK/SH/SZ stocks, we will provide a Yahoo Finance link
-        else:
-            stock['price'] = "N/A"
-            stock['marketCap'] = "N/A"
-            stock['weeklyChange'] = "N/A"
-            stock['monthlyChange'] = "N/A"
-            stock['peRatio'] = "N/A"
-            stock['psRatio'] = "N/A"
-            stock['roeRatio'] = "N/A"
-            stock['pbRatio'] = "N/A"
-            stock['sourceLink'] = f"https://finance.yahoo.com/quote/{stock_code}"
-
         enriched_stocks.append(stock)
     
     return enriched_stocks
@@ -364,169 +370,329 @@ def _save_to_firestore(data):
         return False
 
 def _save_to_notion(data):
-    """Save data to Notion database"""
-    # Helper to convert stock list to a simple string
-    def stocks_to_string(stocks_list):
-        return ", ".join([f"{s['stockCode']} ({s['companyName']})" for s in stocks_list])
-
+    """
+    Save the enriched data to Notion database.
+    """
+    if not NOTION_TOKEN or not NOTION_DATABASE_ID:
+        print("Notion credentials not set, skipping save to Notion.")
+        return False
+    
     try:
-        title = f"每周金融分析报告 - {datetime.now().strftime('%Y-%m-%d')}"
-        
-        us_stocks_notion = stocks_to_string(data.get('usTop10Stocks', []))
-        hk_stocks_notion = stocks_to_string(data.get('hkTop10Stocks', []))
-        cn_stocks_notion = stocks_to_string(data.get('cnTop10Stocks', []))
-        
-        # Ensure all required properties exist in Notion, otherwise this will fail
-        notion.pages.create(
+        new_page = notion.pages.create(
             parent={"database_id": NOTION_DATABASE_ID},
             properties={
-                "Title": {"title": [{"text": {"content": title}}]},
-                "OverallSentiment": {"select": {"name": data['overallSentiment']}},
-                "OverallSummary": {"rich_text": [{"text": {"content": data['overallSummary']}}]},
-                "DailyCommentary": {"rich_text": [{"text": {"content": data['dailyCommentary']}}]},
-                # Convert stock lists to simple strings to avoid length issues
-                "usTop10Stocks": {"rich_text": [{"text": {"content": us_stocks_notion}}]},
-                "hkTop10Stocks": {"rich_text": [{"text": {"content": hk_stocks_notion}}]},
-                "cnTop10Stocks": {"rich_text": [{"text": {"content": cn_stocks_notion}}]},
-                "CrawledDate": {"date": {"start": datetime.now().isoformat()}}
-            }
+                "Name": {
+                    "title": [
+                        {
+                            "text": {
+                                "content": f"金融周报 - {datetime.now().strftime('%Y-%m-%d')}"
+                            }
+                        }
+                    ]
+                },
+                "Date": {
+                    "date": {
+                        "start": datetime.now().isoformat()
+                    }
+                }
+            },
+            children=[
+                {
+                    "object": "block",
+                    "type": "heading_2",
+                    "heading_2": {
+                        "rich_text": [
+                            {"text": {"content": "核心分析"}}
+                        ]
+                    }
+                },
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {"text": {"content": f"整体市场情绪：{data.get('overallSentiment', 'N/A')}"}}
+                        ]
+                    }
+                },
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {"text": {"content": data.get('overallSummary', 'N/A')}}
+                        ]
+                    }
+                },
+                {
+                    "object": "block",
+                    "type": "heading_2",
+                    "heading_2": {
+                        "rich_text": [
+                            {"text": {"content": "中长线投资推荐"}}
+                        ]
+                    }
+                }
+            ]
         )
-        print(f"Successfully wrote to Notion: {title}")
+        
+        for stocks_key in ['usTop10Stocks', 'hkTop10Stocks', 'cnTop10Stocks']:
+            market_name = {
+                'usTop10Stocks': '美股',
+                'hkTop10Stocks': '港股',
+                'cnTop10Stocks': 'A股'
+            }.get(stocks_key, '股票')
+            
+            notion.blocks.children.append(
+                block_id=new_page["id"],
+                children=[
+                    {
+                        "object": "block",
+                        "type": "heading_3",
+                        "heading_3": {
+                            "rich_text": [
+                                {"text": {"content": f"{market_name} Top 10"}}
+                            ]
+                        "heading_3": {
+                            "rich_text": [
+                                {"text": {"content": f"{market_name} Top 10"}}
+                            ]
+                        }
+                    }
+                ]
+            )
+            
+            for stock in data.get(stocks_key, []):
+                stock_info_text = f"**{stock.get('stockCode', 'N/A')}** - {stock.get('companyName', 'N/A')}\n"
+                stock_info_text += f"**原因**: {stock.get('reason', 'N/A')}\n"
+                
+                if market_name == '美股':
+                    stock_info_text += f"**最新价格**: {stock.get('price', 'N/A')}\n"
+                    stock_info_text += f"**市值**: {stock.get('marketCap', 'N/A')}\n"
+                    stock_info_text += f"**周涨幅**: {stock.get('weeklyChange', 'N/A')}%\n"
+                    stock_info_text += f"**市盈率 (PE)**: {stock.get('peRatio', 'N/A')}\n"
+                    stock_info_text += f"**市销率 (PS)**: {stock.get('psRatio', 'N/A')}\n"
+                    stock_info_text += f"**净资产收益率 (ROE)**: {stock.get('roeRatio', 'N/A')}%\n"
+                    stock_info_text += f"**链接**: {stock.get('sourceLink', 'N/A')}"
+                else:
+                    stock_info_text += f"**最新价格**: {stock.get('price', 'N/A')}\n"
+                    stock_info_text += f"**市值**: {stock.get('marketCap', 'N/A')}\n"
+                    stock_info_text += f"**周涨幅**: {stock.get('weeklyChange', 'N/A')}%\n"
+                    stock_info_text += f"**市盈率 (PE)**: {stock.get('peRatio', 'N/A')}\n"
+                    stock_info_text += f"**市净率 (PB)**: {stock.get('pbRatio', 'N/A')}\n"
+                    stock_info_text += f"**链接**: {stock.get('sourceLink', 'N/A')}"
+                    
+                notion.blocks.children.append(
+                    block_id=new_page["id"],
+                    children=[
+                        {
+                            "object": "block",
+                            "type": "paragraph",
+                            "paragraph": {
+                                "rich_text": [{"text": {"content": stock_info_text}}]
+                            }
+                        }
+                    ]
+                )
+
+        print("Successfully saved data to Notion.")
         return True
     except Exception as e:
-        print(f"Failed to write to Notion: {e}")
-        # Add a more specific error log for Notion API
-        print(f"Notion API write failed. Please check if your Notion database properties (e.g., 'Title', 'usTop10Stocks') exist and have the correct names and types (rich_text).")
+        print(f"Failed to save data to Notion: {e}")
         return False
 
-def _generate_html_email_body(data):
+def _format_html_report(data):
     """
-    Generates a modern, clean HTML body for the weekly financial report email.
-    
-    This function has been completely refactored to improve aesthetics and clarity.
-    Key changes:
-    - Overall layout is now a clean, centered card with a subtle shadow.
-    - Uses a consistent color palette and typography for professionalism.
-    - Stock recommendations are presented in three distinct, styled tables for better readability.
-    - Tables feature a header row and alternating row colors (zebra stripes) to make scanning easier.
+    Format the analysis data into a nice-looking HTML report for email.
     """
-    def get_change_color(change):
-        if isinstance(change, (int, float)):
-            if change > 0: return "#16a34a"  # Green
-            elif change < 0: return "#dc2626"  # Red
-        return "#4b5563"  # Gray
-
-    def format_stocks_table_html(stocks, market_name):
-        html = f"""
-        <div style="margin-bottom: 2rem;">
-            <h3 style="font-size: 1.25rem; font-weight: bold; color: #111827; margin-bottom: 1rem; text-align: center;">{market_name}</h3>
-            <div style="overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
-                <table style="width:100%; min-width: 600px; border-collapse: collapse; font-size: 0.875rem; color: #374151; table-layout: fixed;">
-                    <thead>
-                        <tr style="background-color:#e5e7eb; color:#4b5563; font-weight: bold;">
-                            <th style="padding: 1rem 0.75rem; text-align: left;">代码/公司</th>
-                            <th style="padding: 1rem 0.75rem; text-align: left;">价格/市值</th>
-                            <th style="padding: 1rem 0.75rem; text-align: left;">主要比率</th>
-                            <th style="padding: 1rem 0.75rem; text-align: left;">涨跌</th>
-                            <th style="padding: 1rem 0.75rem; text-align: left;">推荐理由</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-        """
-        for i, s in enumerate(stocks):
-            row_bg_color = "#f9fafb" if i % 2 == 0 else "#ffffff"
-            weekly_change = s.get('weeklyChange', 'N/A')
-            monthly_change = s.get('monthlyChange', 'N/A')
-            weekly_change_str = f'{weekly_change}%' if isinstance(weekly_change, (int, float)) else weekly_change
-            monthly_change_str = f'{monthly_change}%' if isinstance(monthly_change, (int, float)) else monthly_change
-            
-            # Use sourceLink if available
-            stock_code_html = f'<a href="{s.get("sourceLink", "#")}" style="color: #2563eb; font-weight: 600; text-decoration: none;">{s["stockCode"]}</a>' if s.get('sourceLink') else f'{s["stockCode"]}'
-            
-            html += f"""
-                        <tr style="background-color:{row_bg_color};">
-                            <td style="padding: 0.75rem; border-top: 1px solid #e5e7eb; font-weight: 600;">{stock_code_html}<br>{s['companyName']}</td>
-                            <td style="padding: 0.75rem; border-top: 1px solid #e5e7eb;">价格: {s.get('price', 'N/A')}<br>市值: {s.get('marketCap', 'N/A')}</td>
-                            <td style="padding: 0.75rem; border-top: 1px solid #e5e7eb;">
-                                PE: {s.get('peRatio', 'N/A')}<br>
-                                PB: {s.get('pbRatio', 'N/A')}<br>
-                                PS: {s.get('psRatio', 'N/A')}<br>
-                                ROE: {s.get('roeRatio', 'N/A')}
-                            </td>
-                            <td style="padding: 0.75rem; border-top: 1px solid #e5e7eb;">
-                                周: <span style="color:{get_change_color(s.get('weeklyChange'))}; font-weight:600;">{weekly_change_str}</span><br>
-                                月: <span style="color:{get_change_color(s.get('monthlyChange'))}; font-weight:600;">{monthly_change_str}</span>
-                            </td>
-                            <td style="padding: 0.75rem; border-top: 1px solid #e5e7eb; vertical-align: top;">{s['reason']}</td>
-                        </tr>
-            """
-        html += '</tbody></table></div></div>'
-        return html
-
-    daily_commentary_html = data['dailyCommentary'].replace('\n', '<br>')
-    us_stocks_html = format_stocks_table_html(data['usTop10Stocks'], '美股 (US)')
-    hk_stocks_html = format_stocks_table_html(data['hkTop10Stocks'], '港股 (HK)')
-    cn_stocks_html = format_stocks_table_html(data['cnTop10Stocks'], '沪深股市 (CN)')
-
-    news_links_html = ""
-    if data.get('relatedNewsLinks'):
-        news_links_html = """
-        <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); margin-bottom: 2rem;">
-            <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">相关财经资讯</h2>
-            <ul style="list-style-type: none; padding: 0; margin-top: 1rem;">
-        """
-        for link in data['relatedNewsLinks']:
-            news_links_html += f"""
-                <li style="margin-bottom: 0.5rem;"><a href="{link.get('url', '#')}" style="color: #2563eb; text-decoration: none;">{link.get('title', '无标题链接')}</a></li>
-            """
-        news_links_html += '</ul></div>'
+    report_date = datetime.now().strftime('%Y年%m月%d日')
     
-    sentiment_color_map = {'利好': '#dcfce7', '利空': '#fee2e2', '中性': '#fef9c3'}
-    sentiment_text_color_map = {'利好': '#16a34a', '利空': '#dc2626', '中性': '#ca8a04'}
-    sentiment_bg = sentiment_color_map.get(data['overallSentiment'], '#f3f4f6')
-    sentiment_text = sentiment_text_color_map.get(data['overallSentiment'], '#374151')
-
     html_content = f"""
+    <!DOCTYPE html>
     <html>
     <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>金融周报 - {report_date}</title>
+        <meta charset="utf-8">
         <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                margin: 0;
+                padding: 20px;
+                background-color: #f4f7f6;
+                color: #333;
+            }}
+            .container {{
+                max-width: 800px;
+                margin: 0 auto;
+                background-color: #ffffff;
+                border-radius: 12px;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+                padding: 30px;
+            }}
+            .header {{
+                text-align: center;
+                border-bottom: 2px solid #e0e0e0;
+                padding-bottom: 20px;
+                margin-bottom: 20px;
+            }}
+            .header h1 {{
+                font-size: 28px;
+                color: #1a1a1a;
+                margin: 0;
+            }}
+            .header p {{
+                color: #777;
+                font-size: 14px;
+                margin-top: 5px;
+            }}
+            .section {{
+                margin-bottom: 30px;
+            }}
+            .section-title {{
+                font-size: 22px;
+                color: #2c3e50;
+                border-left: 4px solid #3498db;
+                padding-left: 10px;
+                margin-bottom: 15px;
+            }}
+            .content p {{
+                line-height: 1.8;
+                font-size: 16px;
+            }}
+            .stock-list {{
+                list-style-type: none;
+                padding: 0;
+            }}
+            .stock-item {{
+                background-color: #f9f9f9;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                padding: 15px;
+                margin-bottom: 15px;
+                transition: transform 0.2s;
+            }}
+            .stock-item:hover {{
+                transform: translateY(-3px);
+            }}
+            .stock-item h4 {{
+                margin: 0 0 5px 0;
+                color: #2980b9;
+                font-size: 18px;
+            }}
+            .stock-item p {{
+                margin: 0;
+                font-size: 14px;
+                line-height: 1.6;
+            }}
+            .stock-reason {{
+                margin-top: 10px;
+                color: #555;
+            }}
+            .link-section {{
+                margin-top: 20px;
+            }}
+            .link-section a {{
+                color: #3498db;
+                text-decoration: none;
+            }}
+            .link-section a:hover {{
+                text-decoration: underline;
+            }}
         </style>
     </head>
-    <body style="font-family: 'Inter', sans-serif; background-color: #f1f5f9; padding: 2rem 1rem;">
-        <div style="max-width: 800px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 6px 12px rgba(0, 0, 0, 0.08); padding: 2rem;">
-            <h1 style="text-align: center; font-size: 2.5rem; font-weight: 800; color: #111827; margin-bottom: 0.5rem; line-height: 1.2;">每周金融分析报告</h1>
-            <p style="text-align: center; font-size: 1.125rem; color: #4b5563; margin-bottom: 2rem;">由 Gemini AI 自动生成</p>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>金融周报</h1>
+                <p>生成日期: {report_date}</p>
+                <p>由 Gemini AI 提供分析，数据由 Alpha Vantage 和 Tushare 提供</p>
+            </div>
 
-            <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); margin-bottom: 2rem;">
-                <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827; text-align: center;">整体市场情绪</h2>
-                <div style="font-size: 2.25rem; font-weight: bold; border-radius: 8px; padding: 1rem; margin-top: 1rem; text-align: center; background-color: {sentiment_bg}; color: {sentiment_text};">
-                    {data['overallSentiment']}
+            <div class="section">
+                <h2 class="section-title">核心分析</h2>
+                <div class="content">
+                    <p><strong>整体市场情绪:</strong> {data.get('overallSentiment', 'N/A')}</p>
+                    <p>{data.get('overallSummary', 'N/A')}</p>
                 </div>
             </div>
 
-            <div style="display: grid; gap: 2rem; margin-bottom: 2rem;">
-                <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-                    <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">整体摘要</h2>
-                    <p style="margin-top: 1rem; color: #374151; line-height: 1.6;">{data['overallSummary']}</p>
-                </div>
-                <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-                    <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827;">每周点评</h2>
-                    <p style="margin-top: 1rem; color: #374151; line-height: 1.6;">{daily_commentary_html}</p>
+            <div class="section">
+                <h2 class="section-title">每周点评与预判</h2>
+                <div class="content">
+                    {data.get('dailyCommentary', 'N/A').replace('\\n', '<br><br>')}
                 </div>
             </div>
             
-            {news_links_html}
+            <div class="section">
+                <h2 class="section-title">中长线投资推荐</h2>
+                <div class="content">
+                    <h3>美股 Top 10</h3>
+                    <ul class="stock-list">
+    """
+    
+    # Helper to add stock items
+    def add_stocks_to_html(stock_list, market_name):
+        nonlocal html_content
+        
+        if stock_list:
+            for stock in stock_list:
+                stock_info_text = f"""
+                <li class="stock-item">
+                    <h4>{stock.get('companyName', 'N/A')} ({stock.get('stockCode', 'N/A')})</h4>
+                    <p class="stock-reason"><strong>入选理由:</strong> {stock.get('reason', 'N/A')}</p>
+                    <p>
+                        <strong>最新价格:</strong> {stock.get('price', 'N/A')} | 
+                        <strong>市值:</strong> {stock.get('marketCap', 'N/A')}<br>
+                        <strong>周涨幅:</strong> {stock.get('weeklyChange', 'N/A')}%
+                    </p>
+                """
+                if market_name == "美股":
+                    stock_info_text += f"""
+                    <p>
+                        <strong>市盈率 (PE):</strong> {stock.get('peRatio', 'N/A')} | 
+                        <strong>市销率 (PS):</strong> {stock.get('psRatio', 'N/A')}<br>
+                        <strong>净资产收益率 (ROE):</strong> {stock.get('roeRatio', 'N/A')}%
+                    </p>
+                    """
+                elif market_name in ["港股", "A股"]:
+                    stock_info_text += f"""
+                    <p>
+                        <strong>市盈率 (PE):</strong> {stock.get('peRatio', 'N/A')} | 
+                        <strong>市净率 (PB):</strong> {stock.get('pbRatio', 'N/A')}
+                    </p>
+                    """
+                
+                stock_info_text += f"""
+                    <p class="link-section"><a href="{stock.get('sourceLink', '#')}">查看更多数据</a></p>
+                </li>
+                """
+                html_content += stock_info_text
+        else:
+            html_content += f"<li><p>暂无{market_name}推荐。</p></li>"
 
-            <div style="background-color: #f9fafb; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-                <h2 style="font-size: 1.5rem; font-weight: bold; color: #111827; text-align: center;">中长线投资推荐</h2>
-                <div style="margin-top: 1.5rem;">
-                    {us_stocks_html}
-                    {hk_stocks_html}
-                    {cn_stocks_html}
-                </div>
+    add_stocks_to_html(data.get('usTop10Stocks'), '美股')
+    html_content += "</ul><h3>港股 Top 10</h3><ul class='stock-list'>"
+    add_stocks_to_html(data.get('hkTop10Stocks'), '港股')
+    html_content += "</ul><h3>A股 Top 10</h3><ul class='stock-list'>"
+    add_stocks_to_html(data.get('cnTop10Stocks'), 'A股')
+    html_content += "</ul></div></div>"
+
+    html_content += """
+            <div class="section">
+                <h2 class="section-title">相关资讯</h2>
+                <ul class="stock-list">
+    """
+    
+    for link in data.get('relatedNewsLinks', []):
+        html_content += f"""
+        <li class="stock-item">
+            <p><strong>{link.get('title', 'N/A')}</strong></p>
+            <p class="link-section"><a href="{link.get('url', '#')}">{link.get('url', '#')}</a></p>
+        </li>
+        """
+
+    html_content += """
+                </ul>
             </div>
         </div>
     </body>
@@ -534,36 +700,41 @@ def _generate_html_email_body(data):
     """
     return html_content
 
-# --- Main execution function ---
 def main():
-    """Main function: execute all tasks sequentially"""
-    raw_text = _get_gemini_analysis()
-    if not raw_text:
+    """Main function to orchestrate the entire process."""
+    print("开始生成金融周报...")
+
+    # 1. Get analysis from Gemini
+    raw_gemini_text = _get_gemini_analysis()
+    if not raw_gemini_text:
+        print("未能获取 Gemini 分析，任务终止。")
         return
 
-    analysis_data = _parse_gemini_response(raw_text)
+    # 2. Parse and enrich the data
+    analysis_data = _parse_gemini_response(raw_gemini_text)
     if not analysis_data:
+        print("未能解析 Gemini 响应，任务终止。")
         return
+
+    # Enrich stock data
+    us_stocks = _enrich_stock_data(analysis_data.get('usTop10Stocks', []), 'us')
+    hk_stocks = _enrich_stock_data(analysis_data.get('hkTop10Stocks', []), 'hk')
+    cn_stocks = _enrich_stock_data(analysis_data.get('cnTop10Stocks', []), 'cn')
     
-    # NEW STEP: Encrich AI data with real-time stock data from API
-    analysis_data['usTop10Stocks'] = _enrich_stock_data(analysis_data.get('usTop10Stocks'))
-    analysis_data['hkTop10Stocks'] = _enrich_stock_data(analysis_data.get('hkTop10Stocks'))
-    analysis_data['cnTop10Stocks'] = _enrich_stock_data(analysis_data.get('cnTop10Stocks'))
+    analysis_data['usTop10Stocks'] = us_stocks
+    analysis_data['hkTop10Stocks'] = hk_stocks
+    analysis_data['cnTop10Stocks'] = cn_stocks
+    
+    # 3. Save data to Notion and Firestore
+    _save_to_notion(analysis_data)
+    _save_to_firestore(analysis_data)
 
-
-    # Attempt to write data to Firestore and Notion
-    # As per the user's request, the outcome of Firestore write will be ignored for the email sending logic
-    firestore_success = _save_to_firestore(analysis_data)
-    notion_success = _save_to_notion(analysis_data)
-
-    if notion_success:
-        subject = f"【理财分析】每周报告 - {datetime.now().strftime('%Y-%m-%d')}"
-        email_body = _generate_html_email_body(analysis_data)
-        send_email_notification(GMAIL_RECIPIENT_EMAILS, subject, email_body, is_html=True)
-    else:
-        # If Notion write failed, send a specific failure notification
-        error_msg = "部分任务失败：Notion写入失败。"
-        send_email_notification(GMAIL_RECIPIENT_EMAILS, "理财分析任务部分失败", error_msg)
+    # 4. Send email notification
+    html_report = _format_html_report(analysis_data)
+    subject = f"您的金融周报 - {datetime.now().strftime('%Y-%m-%d')}"
+    send_email_notification(GMAIL_RECIPIENT_EMAILS, subject, html_report, is_html=True)
+    
+    print("金融周报生成任务完成。")
 
 if __name__ == "__main__":
     main()
