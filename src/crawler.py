@@ -3,7 +3,7 @@
 """
 这个脚本是一个金融周报生成工具，主要功能如下：
 
-1.  **AI 分析**：调用 Gemini API，获取对全球主要市场（美股、港股、A股）的宏观分析和个股推荐。
+1.  **AI 分析**：调用 Gemini API，获取对全球主要市场（美股、港股、A股）的宏观分析和个股推荐，并生成**定制化的投资组合方案**。
 2.  **数据抓取**：使用 Alpha Vantage 和 Tushare 接口获取推荐股票的实时价格、市值、市盈率等关键数据。
 3.  **多平台同步**：将生成的金融周报同步到 Notion 和 Firestore 数据库。
 4.  **邮件通知**：将格式化好的周报以 HTML 邮件的形式发送给指定的收件人。
@@ -126,8 +126,7 @@ def send_email_notification(to_list, subject, message_text, is_html=False):
 # --- Core logic function: Call AI and parse data ---
 def _get_gemini_analysis():
     """
-    Call the Gemini API and return the raw response text.
-    The AI will now only provide stock codes and reasons, not real-time data.
+    Call the Gemini API and return the raw response text, including the new investment portfolio.
     """
     json_schema = {
         "overallSentiment": "利好",
@@ -159,7 +158,43 @@ def _get_gemini_analysis():
                 "companyName": "贵州茅台",
                 "reason": "..."
             }
-        ]
+        ],
+        # 新增的投资组合方案字段
+        "investmentPortfolio": {
+            "capital": "300,000 CNY",
+            "targetAnnualReturn": ">= 20%",
+            "portfolioSummary": "基于市场对科技股和消费复苏的预期，本组合采取长线核心持仓配合短期战术配置的策略，以期达到年化20%以上的目标。组合聚焦香港ETF、港股、A股及跨境基金。",
+            "investmentPlan": [
+                {
+                    "assetName": "恒生科技指数ETF (3033.HK)",
+                    "assetType": "港股ETF",
+                    "allocationRatio": "25%",
+                    "expectedGain": "25% (根据多家投行对香港科技股的估值修正和盈利预期，此ETF具有20%-30%的潜在涨幅)",
+                    "buyTiming": "在恒生科技指数回落至10日均线附近分批买入，可进行首次投入。",
+                    "sellTiming": "除非市场结构性发生变化，否则长线持有。若短期内涨幅超10%，可考虑减仓20%锁定利润。",
+                    "holdingStrategy": "长线核心持有"
+                },
+                {
+                    "assetName": "贵州茅台 (600519.SH)",
+                    "assetType": "A股股票",
+                    "allocationRatio": "20%",
+                    "expectedGain": "20% ~ 35% (市场普遍认为消费复苏带来强劲现金流，若回购超预期，上行空间有望触及2000元，潜在涨幅35%)",
+                    "buyTiming": "在市场对消费股悲观时，且股价低于1600元时，分两批买入。",
+                    "sellTiming": "当估值显著高于历史中位数（例如PE > 45倍）或公司基本面恶化时，考虑卖出。",
+                    "holdingStrategy": "长线核心持有"
+                },
+                {
+                    "assetName": "纳斯达克100指数基金 (159941.SZ)",
+                    "assetType": "A股基金(QDII)",
+                    "allocationRatio": "15%",
+                    "expectedGain": "15% (主要根据美股科技巨头的盈利增长预测，预估在美联储停止加息后会有10%-20%的稳健增长)",
+                    "buyTiming": "跟随美联储政策转向信号，在美元走弱或美股回调5%以上时定投。",
+                    "sellTiming": "作为对冲A股风险的配置，可长期持有，仅在需要进行再平衡时卖出部分。",
+                    "holdingStrategy": "长线配置"
+                }
+                # 后面可以有更多条目，但示例中仅列出3个
+            ]
+        }
     }
     
     prompt_prefix = """
@@ -172,7 +207,12 @@ def _get_gemini_analysis():
    - 选出美股、港股和中国沪深股市各10个值得中长线买入的股票。
    - **核心要求**：为每个推荐提供对应的公司中文名称、股票代码以及简短的入选理由（每个理由请控制在200字以内）。
    - **重要提示**：请不要在你的分析中提供任何股票价格、市值或涨跌幅数据。这些数据将由另一个独立的程序模块获取。
-4. **相关资讯链接**：提供你所分析的市场的相关财经资讯链接，包括美股、港股和沪深股市。
+4. **定制投资组合方案**：
+   - 针对一个拥有 **30万人民币本金** 的投资者，要求投资范围限定为：**香港ETF、港股股票、A股股票和大陆发行的关注美国指数类基金**。
+   - 目标是实现**综合年化收益不低于20%**。
+   - 请综合当前市场行情和长远利益，给出一个详细的组合方案，并严格按照 investmentPortfolio 字段下的 JSON 结构输出。
+   - **投资计划(investmentPlan) 的每个条目必须说明**：资产名称、资产类型、分配比例、**预期股价涨幅（必须基于市场信息和知名投行/机构的研判，并在预测中简要说明研判依据）**、何时适合买入、何时需要卖出，以及是适合长线持有还是短线操作。
+5. **相关资讯链接**：提供你所分析的市场的相关财经资讯链接，包括美股、港股和沪深股市。
 
 你**不允许**在JSON结构的前后添加任何额外文本、解释或免责声明。请将所有分析结果以**严格的JSON格式**返回，确保可直接解析。JSON对象的结构如下：
 """
@@ -194,7 +234,7 @@ def _get_gemini_analysis():
         result_json = response.json()
         raw_text = result_json['candidates'][0]['content']['parts'][0]['text']
         print("成功从 Gemini API 获取响应。")
-        print(f"原始响应文本: {raw_text}")
+        # print(f"原始响应文本: {raw_text}")
         return raw_text
     except Exception as e:
         error_msg = f"Gemini API 调用失败: {e}"
@@ -236,6 +276,7 @@ def _parse_gemini_response(raw_text):
 def _get_us_stock_data(stock_code):
     """
     Get US stock data (price, weekly change, and fundamentals) from Alpha Vantage API.
+    (Function remains the same, used for the main stock recommendation list)
     """
     if not ALPHA_VANTAGE_API_KEY:
         print("ALPHA_VANTAGE_API_KEY environment variable not set. Skipping US stock API call.")
@@ -299,6 +340,7 @@ def _get_us_stock_data(stock_code):
 def _get_cn_hk_stock_data(stock_code):
     """
     Get CN/HK stock data (price and weekly change) from Tushare API.
+    (Function remains the same, used for the main stock recommendation list)
     """
     if not TUSHARE_API_KEY:
         print("TUSHARE_API_KEY environment variable not set. Skipping CN/HK stock API call.")
@@ -417,6 +459,26 @@ def _format_stocks_for_notion(stocks):
     
     return full_string
 
+def _format_portfolio_for_notion(portfolio):
+    """Formats the investment portfolio plan into a structured string for Notion's rich_text property."""
+    if not portfolio:
+        return "N/A"
+
+    summary = f"总本金: {portfolio.get('capital', 'N/A')}\n"
+    summary += f"年化目标: {portfolio.get('targetAnnualReturn', 'N/A')}\n\n"
+    summary += f"综合摘要:\n{portfolio.get('portfolioSummary', 'N/A')}\n\n"
+    
+    plan_list = []
+    for item in portfolio.get('investmentPlan', []):
+        item_str = f"- [{item.get('assetName', 'N/A')} ({item.get('assetType', 'N/A')})]\n"
+        item_str += f"  > 比例: {item.get('allocationRatio', 'N/A')}, 预期: {item.get('expectedGain', 'N/A')}\n"
+        item_str += f"  > 买入: {item.get('buyTiming', 'N/A')}\n"
+        item_str += f"  > 卖出: {item.get('sellTiming', 'N/A')}\n"
+        item_str += f"  > 策略: {item.get('holdingStrategy', 'N/A')}\n"
+        plan_list.append(item_str)
+        
+    return summary + "详细方案:\n" + "\n".join(plan_list)
+
 # --- Storage and Notification Functions ---
 def _save_to_firestore(data):
     """Save data to Firestore database"""
@@ -441,15 +503,17 @@ def _save_to_notion(data):
         return False
 
     try:
-        # Format the stock data to fit Notion's rich_text limit
+        # Format the data for Notion's constraints
         us_stocks_formatted = _format_stocks_for_notion(data.get('usTop10Stocks', []))
         hk_stocks_formatted = _format_stocks_for_notion(data.get('hkTop10Stocks', []))
         cn_stocks_formatted = _format_stocks_for_notion(data.get('cnTop10Stocks', []))
+        portfolio_formatted = _format_portfolio_for_notion(data.get('investmentPortfolio', {}))
 
         # Handle the select property for overall sentiment
         overall_sentiment = data.get('overallSentiment', 'N/A')
         sentiment_property = {}
         if overall_sentiment != 'N/A':
+            # FIX: Notion API requires 'select' property to be a select object, not rich_text.
             sentiment_property = {
                 "select": {
                     "name": overall_sentiment
@@ -484,6 +548,16 @@ def _save_to_notion(data):
                     {
                         "text": {
                             "content": data.get('dailyCommentary', 'N/A')
+                        }
+                    }
+                ]
+            },
+            # 新增的投资组合字段
+            "InvestmentPortfolio": {
+                "rich_text": [
+                    {
+                        "text": {
+                            "content": portfolio_formatted
                         }
                     }
                 ]
@@ -607,10 +681,12 @@ def _format_html_report(data):
                 border: 1px solid #e0e0e0;
                 text-align: left;
                 white-space: nowrap;
+                font-size: 13px;
             }}
             .stock-table th {{
                 background-color: #f0f0f0;
                 font-weight: bold;
+                font-size: 14px;
             }}
             .stock-table tr:nth-child(even) {{
                 background-color: #fafafa;
@@ -654,6 +730,56 @@ def _format_html_report(data):
             </div>
             
             <div class="section">
+                <h2 class="section-title">定制投资组合方案</h2>
+                <div class="content">
+                    <h4>方案目标</h4>
+                    <p><strong>本金:</strong> {data.get('investmentPortfolio', {}).get('capital', 'N/A')} | 
+                       <strong>年化收益目标:</strong> {data.get('investmentPortfolio', {}).get('targetAnnualReturn', 'N/A')}
+                    </p>
+                    <h4>综合摘要</h4>
+                    <p>{data.get('investmentPortfolio', {}).get('portfolioSummary', 'N/A')}</p>
+                </div>
+                
+                <div class="stock-table-container">
+                    <table class="stock-table">
+                        <thead>
+                            <tr>
+                                <th>资产名称</th>
+                                <th>资产类型</th>
+                                <th>分配比例</th>
+                                <th>预期涨幅（含研判依据）</th>
+                                <th>买入建议</th>
+                                <th>卖出建议</th>
+                                <th>持有策略</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+    """
+    
+    # Helper to add investment plan items
+    investment_plan = data.get('investmentPortfolio', {}).get('investmentPlan', [])
+    if investment_plan:
+        for item in investment_plan:
+            html_content += f"""
+                            <tr>
+                                <td>{item.get('assetName', 'N/A')}</td>
+                                <td>{item.get('assetType', 'N/A')}</td>
+                                <td>{item.get('allocationRatio', 'N/A')}</td>
+                                <td>{item.get('expectedGain', 'N/A')}</td>
+                                <td>{item.get('buyTiming', 'N/A')}</td>
+                                <td>{item.get('sellTiming', 'N/A')}</td>
+                                <td><strong>{item.get('holdingStrategy', 'N/A')}</strong></td>
+                            </tr>
+            """
+    else:
+        html_content += """<tr><td colspan="7">暂无定制投资组合方案。</td></tr>"""
+
+    html_content += "</tbody></table></div></div>"
+    
+    
+    # --- Start of Existing Stock Recommendations (re-formatted to tables) ---
+    html_content += """
+            <div class="section">
                 <h2 class="section-title">中长线投资推荐</h2>
                 <div class="stock-table-container">
                     <h3>美股 Top 10</h3>
@@ -666,9 +792,9 @@ def _format_html_report(data):
                                 <th>最新价格</th>
                                 <th>市值</th>
                                 <th>周涨幅</th>
-                                <th>市盈率 (PE)</th>
-                                <th>市销率 (PS)</th>
-                                <th>净资产收益率 (ROE)</th>
+                                <th>PE</th>
+                                <th>PS</th>
+                                <th>ROE</th>
                                 <th>详情</th>
                             </tr>
                         </thead>
@@ -717,11 +843,12 @@ def _format_html_report(data):
             html_content += f"""<tr><td colspan="9">暂无{market_name}推荐。</td></tr>"""
 
     add_us_stocks_to_html_table(data.get('usTop10Stocks'))
-    html_content += "</tbody></table><h3>港股 Top 10</h3><table class='stock-table'><thead><tr><th>公司</th><th>代码</th><th>入选理由</th><th>最新价格</th><th>市值</th><th>周涨幅</th><th>市盈率 (PE)</th><th>市净率 (PB)</th><th>详情</th></tr></thead><tbody>"
+    html_content += "</tbody></table><h3>港股 Top 10</h3><table class='stock-table'><thead><tr><th>公司</th><th>代码</th><th>入选理由</th><th>最新价格</th><th>市值</th><th>周涨幅</th><th>PE</th><th>PB</th><th>详情</th></tr></thead><tbody>"
     add_other_stocks_to_html_table(data.get('hkTop10Stocks'), '港股')
-    html_content += "</tbody></table><h3>A股 Top 10</h3><table class='stock-table'><thead><tr><th>公司</th><th>代码</th><th>入选理由</th><th>最新价格</th><th>市值</th><th>周涨幅</th><th>市盈率 (PE)</th><th>市净率 (PB)</th><th>详情</th></tr></thead><tbody>"
+    html_content += "</tbody></table><h3>A股 Top 10</h3><table class='stock-table'><thead><tr><th>公司</th><th>代码</th><th>入选理由</th><th>最新价格</th><th>市值</th><th>周涨幅</th><th>PE</th><th>PB</th><th>详情</th></tr></thead><tbody>"
     add_other_stocks_to_html_table(data.get('cnTop10Stocks'), 'A股')
     html_content += "</tbody></table></div></div>"
+    # --- End of Existing Stock Recommendations ---
 
     html_content += """
             <div class="section">
