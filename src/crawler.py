@@ -21,7 +21,7 @@ pip install tushare requests notion-client google-api-python-client google-auth-
 -   GMAIL_CLIENT_SECRET
 -   GMAIL_REFRESH_TOKEN
 -   GMAIL_RECIPIENT_EMAILS
--   FIREBASE_CONFIG_JSON
+-   FIREBASE_CONFIG_JSON  <-- 检查此变量是否配置正确
 -   ALPHA_VANTAGE_API_KEY
 -   TUSHARE_API_KEY
 -   __app_id
@@ -77,12 +77,26 @@ notion = Client(auth=NOTION_TOKEN)
 db = None
 if FIREBASE_CONFIG_JSON:
     try:
-        cred = credentials.Certificate(json.loads(FIREBASE_CONFIG_JSON))
-        initialize_app(cred)
+        # Load the configuration string as a dictionary
+        firebase_config = json.loads(FIREBASE_CONFIG_JSON)
+        # We need a proper way to check if the app is already initialized in the environment
+        # or use a check if the initialization is truly necessary.
+        # Since this script runs in a new environment, we can proceed.
+        
+        # Ensure the credential object is correctly formed
+        cred = credentials.Certificate(firebase_config)
+        
+        # Check if the app is already initialized to prevent error
+        try:
+            initialize_app(cred)
+        except ValueError:
+            # App is already initialized, usually by a previous script/process
+            pass
+            
         db = firestore.client()
         print("Firebase Admin SDK initialized successfully.")
     except Exception as e:
-        print(f"Failed to initialize Firebase Admin SDK. Check FIREBASE_CONFIG_JSON: {e}")
+        print(f"Failed to initialize Firebase Admin SDK. Check FIREBASE_CONFIG_JSON format: {e}")
 else:
     print("FIREBASE_CONFIG_JSON environment variable not found. Firebase Admin SDK not initialized.")
 
@@ -169,7 +183,7 @@ def _get_gemini_analysis():
                     "assetName": "恒生科技指数ETF (3033.HK)",
                     "assetType": "港股ETF",
                     "allocationRatio": "25%",
-                    "expectedGain": "25% (根据多家投行对香港科技股的估值修正和盈利预期，此ETF具有20%-30%的潜在涨幅)",
+                    "expectedGain": "25% (根据多家投行对香港科技股的估值修正和盈利预期，此ETF具有20%-30%的潜在涨幅，研判依据：...) ",
                     "buyTiming": "在恒生科技指数回落至10日均线附近分批买入，可进行首次投入。",
                     "sellTiming": "除非市场结构性发生变化，否则长线持有。若短期内涨幅超10%，可考虑减仓20%锁定利润。",
                     "holdingStrategy": "长线核心持有"
@@ -178,21 +192,11 @@ def _get_gemini_analysis():
                     "assetName": "贵州茅台 (600519.SH)",
                     "assetType": "A股股票",
                     "allocationRatio": "20%",
-                    "expectedGain": "20% ~ 35% (市场普遍认为消费复苏带来强劲现金流，若回购超预期，上行空间有望触及2000元，潜在涨幅35%)",
+                    "expectedGain": "20% ~ 35% (市场普遍认为消费复苏带来强劲现金流，若回购超预期，上行空间有望触及2000元，潜在涨幅35%，研判依据：...)",
                     "buyTiming": "在市场对消费股悲观时，且股价低于1600元时，分两批买入。",
                     "sellTiming": "当估值显著高于历史中位数（例如PE > 45倍）或公司基本面恶化时，考虑卖出。",
                     "holdingStrategy": "长线核心持有"
                 },
-                {
-                    "assetName": "纳斯达克100指数基金 (159941.SZ)",
-                    "assetType": "A股基金(QDII)",
-                    "allocationRatio": "15%",
-                    "expectedGain": "15% (主要根据美股科技巨头的盈利增长预测，预估在美联储停止加息后会有10%-20%的稳健增长)",
-                    "buyTiming": "跟随美联储政策转向信号，在美元走弱或美股回调5%以上时定投。",
-                    "sellTiming": "作为对冲A股风险的配置，可长期持有，仅在需要进行再平衡时卖出部分。",
-                    "holdingStrategy": "长线配置"
-                }
-                # 后面可以有更多条目，但示例中仅列出3个
             ]
         }
     }
@@ -202,7 +206,8 @@ def _get_gemini_analysis():
 
 请完成以下分析任务：
 1. **整体市场情绪和摘要**：给出对整体市场情绪的判断（利好、利空或中性），并提供一份整体行情摘要。
-2. **每周点评与预判**：给出对美股、港股和大陆股市的专业点评和对后续走势的预判。请将此部分内容格式化为清晰的文本，用“美股市场点评：”等标题区分。
+2. **每周点评与预判**：给出对美股、港股和大陆股市的专业点评和对后续走势的预判。
+   **注意：此字段 (dailyCommentary) 必须是一个包含所有市场评论的**单行文本字符串**，请使用“美股市场点评：”等标题在文本内区分，不要使用嵌套的JSON对象结构。
 3. **中长线投资推荐**：
    - 选出美股、港股和中国沪深股市各10个值得中长线买入的股票。
    - **核心要求**：为每个推荐提供对应的公司中文名称、股票代码以及简短的入选理由（每个理由请控制在200字以内）。
@@ -259,12 +264,24 @@ def _parse_gemini_response(raw_text):
         
         analysis_data = json.loads(json_text)
         print("成功解析 JSON 数据。")
+        
+        # --- FIX for AttributeError: 'dict' object has no attribute 'replace' ---
+        # 强制将 dailyCommentary 转换为字符串，以防止 AI 错误地返回字典
+        daily_commentary = analysis_data.get('dailyCommentary')
+        if isinstance(daily_commentary, dict):
+            print("Warning: dailyCommentary returned as dict. Attempting to flatten to string.")
+            # 展平字典中的所有字符串值，用两行换行符分隔
+            # 例如：{"usMarketCommentary": "...", "hkMarketCommentary": "..."} -> "usMarketCommentary: ...\n\nhkMarketCommentary: ..."
+            analysis_data['dailyCommentary'] = "\n\n".join(
+                f"{k}: {v}" for k, v in daily_commentary.items() if isinstance(v, str)
+            )
+        # --- END FIX ---
 
         end_date = datetime.now()
         start_date = end_date - timedelta(days=6)
         date_prefix = f"过去一周（{start_date.strftime('%Y年%m月%d日')}-{end_date.strftime('%d日')}）：\n\n"
         
-        analysis_data['overallSummary'] = date_prefix + analysis_data['overallSummary']
+        analysis_data['overallSummary'] = date_prefix + analysis_data.get('overallSummary', 'N/A')
         
         return analysis_data
     except (json.JSONDecodeError, ValueError) as e:
@@ -384,8 +401,15 @@ def _get_cn_hk_stock_data(stock_code):
             print(f"无法从 Tushare 获取 {stock_code} 数据。")
             return None
     except Exception as e:
-        print(f"调用 Tushare API 失败: {e}")
-        return None
+        error_message = str(e)
+        # 增强：检查是否是权限不足的错误信息
+        if "没有接口访问权限" in error_message or "权限的具体详情" in error_message:
+             print(f"Tushare API 访问权限受限，跳过数据获取：{error_message}")
+             # 返回 None 但不中断进程
+             return None
+        else:
+             print(f"调用 Tushare API 失败: {error_message}")
+             return None
 
 
 def _enrich_stock_data(stocks_list, market_type):
@@ -420,6 +444,7 @@ def _enrich_stock_data(stocks_list, market_type):
             if data:
                 stock.update(data)
             else:
+                # Tushare data fetch failed, set placeholders
                 stock['price'] = "N/A"
                 stock['marketCap'] = "N/A"
                 stock['weeklyChange'] = "N/A"
@@ -447,8 +472,12 @@ def _format_stocks_for_notion(stocks):
             stock_str += f" | 价格: {price}"
         
         weekly_change = stock.get('weeklyChange')
+        # Check if weeklyChange is a float or string and format it
         if weekly_change != 'N/A':
-            stock_str += f" | 周涨幅: {weekly_change}%"
+            if isinstance(weekly_change, (float, int)):
+                stock_str += f" | 周涨幅: {weekly_change:.2f}%"
+            else:
+                stock_str += f" | 周涨幅: {weekly_change}%"
             
         formatted_list.append(stock_str)
         
@@ -487,7 +516,11 @@ def _save_to_firestore(data):
         return False
     try:
         doc_ref = db.collection('artifacts').document(APP_ID).collection('public').document('data').collection('finance_reports').document('latest')
-        doc_ref.set(data)
+        
+        # Prepare data for Firestore (remove complex objects if necessary, though the structure is mostly flat now)
+        firestore_data = data.copy()
+        
+        doc_ref.set(firestore_data)
         print("Successfully wrote data to Firestore.")
         return True
     except Exception as e:
@@ -508,6 +541,7 @@ def _save_to_notion(data):
         hk_stocks_formatted = _format_stocks_for_notion(data.get('hkTop10Stocks', []))
         cn_stocks_formatted = _format_stocks_for_notion(data.get('cnTop10Stocks', []))
         portfolio_formatted = _format_portfolio_for_notion(data.get('investmentPortfolio', {}))
+        daily_commentary_content = data.get('dailyCommentary', 'N/A')
 
         # Handle the select property for overall sentiment
         overall_sentiment = data.get('overallSentiment', 'N/A')
@@ -543,11 +577,12 @@ def _save_to_notion(data):
                     }
                 ]
             },
+            # 使用已确保是字符串类型的 dailyCommentary_content
             "DailyCommentary": {
                 "rich_text": [
                     {
                         "text": {
-                            "content": data.get('dailyCommentary', 'N/A')
+                            "content": daily_commentary_content
                         }
                     }
                 ]
@@ -613,8 +648,14 @@ def _format_html_report(data):
     """
     report_date = datetime.now().strftime('%Y年%m月%d日')
     
-    # Sanitize commentary before inserting into HTML
-    commentary_html = data.get('dailyCommentary', 'N/A').replace('\n', '<br><br>')
+    # 确保 dailyCommentary 是字符串后再进行 replace
+    raw_commentary = data.get('dailyCommentary', 'N/A')
+    commentary_html = ""
+    if isinstance(raw_commentary, str):
+        commentary_html = raw_commentary.replace('\n', '<br><br>')
+    else:
+        # Fallback in case the defensive parse failed (should not happen now)
+        commentary_html = str(raw_commentary) 
     
     html_content = f"""
     <!DOCTYPE html>
@@ -805,6 +846,8 @@ def _format_html_report(data):
         nonlocal html_content
         if stock_list:
             for stock in stock_list:
+                weekly_change_str = f"{stock.get('weeklyChange', 'N/A')}%" if isinstance(stock.get('weeklyChange'), (float, int)) else stock.get('weeklyChange', 'N/A')
+                roe_ratio_str = f"{stock.get('roeRatio', 'N/A')}%" if isinstance(stock.get('roeRatio'), (float, int)) else stock.get('roeRatio', 'N/A')
                 html_content += f"""
                             <tr>
                                 <td>{stock.get('companyName', 'N/A')}</td>
@@ -812,10 +855,10 @@ def _format_html_report(data):
                                 <td>{stock.get('reason', 'N/A')}</td>
                                 <td>{stock.get('price', 'N/A')}</td>
                                 <td>{stock.get('marketCap', 'N/A')}</td>
-                                <td>{stock.get('weeklyChange', 'N/A')}%</td>
+                                <td>{weekly_change_str}</td>
                                 <td>{stock.get('peRatio', 'N/A')}</td>
                                 <td>{stock.get('psRatio', 'N/A')}</td>
-                                <td>{stock.get('roeRatio', 'N/A')}%</td>
+                                <td>{roe_ratio_str}</td>
                                 <td><a href="{stock.get('sourceLink', '#')}">查看</a></td>
                             </tr>
                 """
@@ -826,6 +869,7 @@ def _format_html_report(data):
         nonlocal html_content
         if stock_list:
             for stock in stock_list:
+                weekly_change_str = f"{stock.get('weeklyChange', 'N/A')}%" if isinstance(stock.get('weeklyChange'), (float, int)) else stock.get('weeklyChange', 'N/A')
                 html_content += f"""
                             <tr>
                                 <td>{stock.get('companyName', 'N/A')}</td>
@@ -833,7 +877,7 @@ def _format_html_report(data):
                                 <td>{stock.get('reason', 'N/A')}</td>
                                 <td>{stock.get('price', 'N/A')}</td>
                                 <td>{stock.get('marketCap', 'N/A')}</td>
-                                <td>{stock.get('weeklyChange', 'N/A')}%</td>
+                                <td>{weekly_change_str}</td>
                                 <td>{stock.get('peRatio', 'N/A')}</td>
                                 <td>{stock.get('pbRatio', 'N/A')}</td>
                                 <td><a href="{stock.get('sourceLink', '#')}">查看</a></td>
@@ -890,6 +934,7 @@ def main():
         return
 
     # Enrich stock data
+    # 注意：Tushare 权限错误现在会被捕获并跳过，不会导致整体崩溃
     us_stocks = _enrich_stock_data(analysis_data.get('usTop10Stocks', []), 'us')
     hk_stocks = _enrich_stock_data(analysis_data.get('hkTop10Stocks', []), 'hk')
     cn_stocks = _enrich_stock_data(analysis_data.get('cnTop10Stocks', []), 'cn')
