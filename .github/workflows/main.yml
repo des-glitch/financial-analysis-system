@@ -36,6 +36,7 @@ jobs:
           GMAIL_RECIPIENT_EMAILS: ${{ secrets.GMAIL_RECIPIENT_EMAILS }}
           # Gemini API 密钥
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
           FIREBASE_CONFIG_JSON: ${{ secrets.FIREBASE_CONFIG_JSON }}
           TUSHARE_API_KEY: ${{ secrets.TUSHARE_API_KEY }}
