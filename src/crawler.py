@@ -11,17 +11,15 @@
 **运行环境依赖**：
 请确保在运行此脚本之前，已安装所有必需的 Python 库。您可以通过以下命令安装：
 
-pip install tushare requests notion-client google-api-python-client google-auth-oauthlib firebase-admin
+pip install tushare requests notion-client sendgrid firebase-admin
 
 **环境变量配置**：
 本脚本依赖多个环境变量来访问 API 和服务。请确保已在您的运行环境中（如 GitHub Actions Secrets）配置以下变量：
 -   NOTION_TOKEN
 -   NOTION_DATABASE_ID
--   GMAIL_CLIENT_ID
--   GMAIL_CLIENT_SECRET
--   GMAIL_REFRESH_TOKEN
--   GMAIL_RECIPIENT_EMAILS
--   FIREBASE_CONFIG_JSON  <-- 检查此变量是否配置正确
+-   SENDGRID_API_KEY
+-   GMAIL_RECIPIENT_EMAILS  <-- 此变量的第一个邮箱将用作 SendGrid 发件人 (FROM_EMAIL)
+-   FIREBASE_CONFIG_JSON
 -   ALPHA_VANTAGE_API_KEY
 -   TUSHARE_API_KEY
 -   __app_id
@@ -32,11 +30,6 @@ pip install tushare requests notion-client google-api-python-client google-auth-
 import os
 import requests
 from notion_client import Client
-import base64
-from email.mime.text import MIMEText
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
 from datetime import datetime, timedelta
 import json
 import time
@@ -44,20 +37,29 @@ import re
 from firebase_admin import credentials, initialize_app, firestore
 import tushare as ts
 
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
+
 # --- Configuration ---
 # Get environment variables from GitHub Actions Secrets
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 
-GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID")
-GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET")
-GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN")
+# --- SendGrid Configuration ---
+SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
 
 gmail_emails_str = os.environ.get("GMAIL_RECIPIENT_EMAILS") or os.environ.get("GMAIL_RECIPIENT_EMAIL")
+
 if gmail_emails_str:
     GMAIL_RECIPIENT_EMAILS = [email.strip() for email in gmail_emails_str.split(',')]
+    # *** 关键修改：将列表中的第一个邮箱地址作为 SendGrid 的发件人邮箱 ***
+    FROM_EMAIL = GMAIL_RECIPIENT_EMAILS[0] 
 else:
     GMAIL_RECIPIENT_EMAILS = []
+    FROM_EMAIL = None # 如果没有收件人，则没有发件人
+
+if not FROM_EMAIL:
+    print("Warning: 环境变量 'GMAIL_RECIPIENT_EMAILS' 未设置或为空。SendGrid 发件人邮箱 (FROM_EMAIL) 无法确定。")
 
 # Get Firebase config from environment variables
 FIREBASE_CONFIG_JSON = os.environ.get("FIREBASE_CONFIG_JSON")
@@ -79,9 +81,6 @@ if FIREBASE_CONFIG_JSON:
     try:
         # Load the configuration string as a dictionary
         firebase_config = json.loads(FIREBASE_CONFIG_JSON)
-        # We need a proper way to check if the app is already initialized in the environment
-        # or use a check if the initialization is truly necessary.
-        # Since this script runs in a new environment, we can proceed.
         
         # Ensure the credential object is correctly formed
         cred = credentials.Certificate(firebase_config)
@@ -100,42 +99,39 @@ if FIREBASE_CONFIG_JSON:
 else:
     print("FIREBASE_CONFIG_JSON environment variable not found. Firebase Admin SDK not initialized.")
 
-# --- Gmail API authentication ---
-def get_gmail_service():
-    """Get a Gmail service instance using OAuth2 credentials"""
-    creds = Credentials(
-        token=None,
-        refresh_token=GMAIL_REFRESH_TOKEN,
-        client_id=GMAIL_CLIENT_ID,
-        client_secret=GMAIL_CLIENT_SECRET,
-        token_uri="https://oauth2.googleapis.com/token"
-    )
-    creds.refresh(Request())
-    service = build("gmail", "v1", credentials=creds)
-    return service
-
-def create_message(sender, to, subject, message_text, subtype="plain"):
-    """Create a MIMEText message object, supporting a specified subtype"""
-    message = MIMEText(message_text, subtype)
-    message["to"] = to
-    message["from"] = sender
-    message["subject"] = subject
-    return {"raw": base64.urlsafe_b64encode(message.as_bytes()).decode()}
-
+# --- SendGrid Email Function ---
 def send_email_notification(to_list, subject, message_text, is_html=False):
-    """Send an email using the Gmail API"""
+    """
+    Send an email using the SendGrid API with HTML content.
+    """
+    if not SENDGRID_API_KEY:
+        print("SENDGRID_API_KEY environment variable not set, skipping email sending.")
+        return
+        
+    if not FROM_EMAIL:
+        print("FROM_EMAIL (SendGrid Sender) is not set, skipping email sending.")
+        return
+        
     if not to_list:
         print("No recipient emails specified, skipping email sending.")
         return
         
     try:
-        service = get_gmail_service()
-        for to in to_list:
-            message = create_message("me", to.strip(), subject, message_text, "html" if is_html else "plain")
-            service.users().messages().send(userId="me", body=message).execute()
-            print(f"Successfully sent email to: {to.strip()}")
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+
+        for to_email in to_list:
+            message = Mail(
+                from_email=FROM_EMAIL, # 使用动态获取的发件人邮箱
+                to_emails=to_email.strip(),
+                subject=subject,
+                html_content=message_text
+            )
+            
+            response = sg.send(message)
+            print(f"Successfully sent email to: {to_email.strip()}, Status Code: {response.status_code}")
+            
     except Exception as e:
-        print(f"Failed to send email: {e}")
+        print(f"Failed to send email via SendGrid: {e}")
 
 # --- Core logic function: Call AI and parse data ---
 def _get_gemini_analysis():
@@ -271,7 +267,6 @@ def _parse_gemini_response(raw_text):
         if isinstance(daily_commentary, dict):
             print("Warning: dailyCommentary returned as dict. Attempting to flatten to string.")
             # 展平字典中的所有字符串值，用两行换行符分隔
-            # 例如：{"usMarketCommentary": "...", "hkMarketCommentary": "..."} -> "usMarketCommentary: ...\n\nhkMarketCommentary: ..."
             analysis_data['dailyCommentary'] = "\n\n".join(
                 f"{k}: {v}" for k, v in daily_commentary.items() if isinstance(v, str)
             )
@@ -775,7 +770,7 @@ def _format_html_report(data):
                 <div class="content">
                     <h4>方案目标</h4>
                     <p><strong>本金:</strong> {data.get('investmentPortfolio', {}).get('capital', 'N/A')} | 
-                       <strong>年化收益目标:</strong> {data.get('investmentPortfolio', {}).get('targetAnnualReturn', 'N/A')}
+                       <strong>年化目标:</strong> {data.get('investmentPortfolio', {}).get('targetAnnualReturn', 'N/A')}
                     </p>
                     <h4>综合摘要</h4>
                     <p>{data.get('investmentPortfolio', {}).get('portfolioSummary', 'N/A')}</p>
