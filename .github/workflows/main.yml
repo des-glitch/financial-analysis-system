@@ -9,6 +9,9 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
 
+    # 设置一个 15 分钟的超时，防止API调用超时导致无限等待
+    timeout-minutes: 15
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
@@ -16,7 +19,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v2
         with:
-          python-version: '3.9'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
