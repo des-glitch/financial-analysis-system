@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+ƒ# -*- coding: utf-8 -*-
 
 """
 这个脚本是一个金融周报生成工具，主要功能如下：
@@ -228,7 +228,7 @@ def _get_gemini_analysis():
     }
     
     headers = { "Content-Type": "application/json" }
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={GEMINI_API_KEY}"
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     
     print("开始调用 Gemini API...")
     try:
