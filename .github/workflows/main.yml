@@ -2,7 +2,7 @@ name: Financial News Scraper
 
 on:
   schedule:
-    - cron: '23 55 * * *' # 每天早上9点（UTC时间）运行
+    - cron: '01 01 * * *' # 每天早上9点（UTC时间）运行
   workflow_dispatch: # 允许手动触发
 
 jobs:
